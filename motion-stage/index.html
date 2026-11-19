@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MotionStage — 武侠 3D 动作捕捉、AI 去抖锁脚与顿帧烘焙工作台</title>
+    <meta
+      name="description"
+      content="基于 Three.js 与 MediaPipe Heavy 的 3D 武侠动作生产工作台：支持长视频区间裁切提取、零相去抖滤波、双骨 IK 锁脚、前摇压缩与顿帧烘焙、滑步遥测曲线及标准 21 骨骼 BVH 导出。"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/src/style.css" />
+    <link rel="stylesheet" href="/src/combat/combat.css" />
+  </head>
+  <body>
+    <main id="stage-root" aria-label="3D 角色动作舞台" data-active-mode="workbench">
+      <div id="canvas-container" data-workbench-ui></div>
+      <div id="combat-arena-container" class="combat-arena-host" hidden></div>
+
+      <!-- Top-Left Minimal Motion Source Bar & Unified Stage Switcher -->
+      <header id="top-floating-bar" role="banner">
+        <h1 id="stage-title">MotionStage</h1>
+        <span class="bar-divider" aria-hidden="true"></span>
+
+        <div
+          id="stage-mode-switcher"
+          class="stage-mode-switcher"
+          role="tablist"
+          aria-label="舞台模式切换"
+        >
+          <button
+            type="button"
+            id="btn-mode-workbench"
+            class="stage-mode-tab active"
+            role="tab"
+            aria-selected="true"
+            data-stage-mode="workbench"
+          >
+            🛠 动作生产工作台
+          </button>
+          <button
+            type="button"
+            id="btn-mode-combat"
+            class="stage-mode-tab"
+            role="tab"
+            aria-selected="false"
+            data-stage-mode="combat"
+          >
+            ⚔️ 武侠肉鸽战斗验证台
+          </button>
+        </div>
+
+        <span class="bar-divider" aria-hidden="true" data-workbench-ui></span>
+
+        <nav id="preset-nav" aria-label="动作预设" data-workbench-ui>
+          <button type="button" id="btn-clip-slash" class="chip-btn active" data-clip="slash">
+            剑术连斩
+          </button>
+          <button type="button" id="btn-clip-kick" class="chip-btn" data-clip="kick">
+            回旋踢
+          </button>
+          <button type="button" id="btn-clip-backflip" class="chip-btn" data-clip="backflip">
+            后空翻
+          </button>
+          <button type="button" id="btn-clip-run" class="chip-btn" data-clip="run">
+            奔跑
+          </button>
+        </nav>
+
+        <select
+          id="asset-library-select"
+          class="asset-select"
+          aria-label="内置动作与视频资产库"
+          title="选择内置标准 BVH 成品动作或太白武术参考视频"
+          data-workbench-ui
+        >
+          <option value="">内置资产库 (BVH / 太白实拍)...</option>
+        </select>
+
+        <button
+          type="button"
+          id="btn-demo-taibai"
+          class="demo-video-btn"
+          title="实测工作流：从真实中国武术冠军实拍视频实时提取 3D 骨骼、双骨 IK 锁脚并复刻太白剑意身法"
+          data-workbench-ui
+        >
+          太白剑意·视频实测
+        </button>
+
+        <label
+          for="media-upload-input"
+          id="btn-upload-capture"
+          class="upload-cta"
+          title="上传人物视频 (.mp4/.webm)、全身图片 (.jpg/.png) 或 .bvh 动作文件"
+          data-workbench-ui
+        >
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path
+              d="M8 2.5v11M2.5 8h11"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+            />
+          </svg>
+          <span>从视频/图片提取动作</span>
+          <input
+            type="file"
+            id="media-upload-input"
+            accept="video/*,image/*,.bvh"
+            hidden
+          />
+        </label>
+
+        <button
+          type="button"
+          id="btn-toggle-workbench"
+          class="mono-btn active"
+          aria-pressed="true"
+          title="显示或隐藏右侧滤波锁脚与打击曲线参数台"
+          data-workbench-ui
+        >
+          参数台
+        </button>
+      </header>
+
+      <!-- Right Floating Column: Reference Media PiP + Trim Bar + Workbench Parameter Drawer -->
+      <div id="right-floating-rail" data-workbench-ui>
+        <aside id="source-pip" aria-label="动作参考源画面" data-workbench-ui hidden>
+          <div class="pip-header">
+            <span id="pip-label" class="pip-title">参考画面</span>
+            <button type="button" id="btn-close-pip" class="pip-close" aria-label="关闭参考小窗">
+              ×
+            </button>
+          </div>
+          <div class="pip-media-frame">
+            <video id="pip-video" muted playsinline hidden></video>
+            <img id="pip-image" alt="上传的姿态参考图" hidden />
+            <div id="pip-progress-overlay" hidden>
+              <span id="pip-progress-text">正在提取 3D 动作...</span>
+            </div>
+          </div>
+
+          <!-- Long-Video In/Out Trim & FPS Controls (F6) -->
+          <div id="pip-trim-controls" class="pip-trim-controls" hidden>
+            <div class="trim-head">
+              <span class="trim-title">入/出点裁切 (In/Out)</span>
+              <span id="lbl-trim-summary" class="trim-summary">0.00s – 3.00s (3.00s)</span>
+            </div>
+            <div class="trim-range-stack">
+              <div class="trim-range-line">
+                <label for="trim-in-range">入</label>
+                <input
+                  type="range"
+                  id="trim-in-range"
+                  min="0"
+                  max="10"
+                  step="0.05"
+                  value="0"
+                  aria-label="视频截取入点滑块"
+                />
+              </div>
+              <div class="trim-range-line">
+                <label for="trim-out-range">出</label>
+                <input
+                  type="range"
+                  id="trim-out-range"
+                  min="0"
+                  max="10"
+                  step="0.05"
+                  value="3"
+                  aria-label="视频截取出点滑块"
+                />
+              </div>
+            </div>
+            <div class="trim-num-row">
+              <input
+                type="number"
+                id="trim-in-num"
+                class="trim-num-input"
+                min="0"
+                max="10"
+                step="0.05"
+                value="0.00"
+                title="截取起始秒数 (In)"
+                aria-label="截取入点秒数"
+              />
+              <span class="trim-sep">~</span>
+              <input
+                type="number"
+                id="trim-out-num"
+                class="trim-num-input"
+                min="0"
+                max="10"
+                step="0.05"
+                value="3.00"
+                title="截取结束秒数 (Out)"
+                aria-label="截取出点秒数"
+              />
+              <select id="trim-fps-select" class="trim-fps-select" title="提取采样帧率" aria-label="提取采样帧率">
+                <option value="24" selected>24fps</option>
+                <option value="30">30fps</option>
+                <option value="60">60fps</option>
+              </select>
+              <button type="button" id="btn-reextract-trim" class="trim-extract-btn">
+                截取提取
+              </button>
+            </div>
+          </div>
+        </aside>
+
+        <aside
+          id="workbench-drawer"
+          class="workbench-drawer"
+          aria-label="动作清洗与节奏烘焙参数台"
+          data-workbench-ui
+        ></aside>
+      </div>
+
+      <!-- Bottom-Left Real-Time Foot-Slip / Jitter / Combat Warp Telemetry HUD (F9) -->
+      <section
+        id="telemetry-hud"
+        class="telemetry-hud"
+        aria-label="滑步与抖动实时遥测曲线"
+        data-workbench-ui
+      ></section>
+
+      <!-- Subtle Split-View Labels (Only visible in Side-by-Side mode) -->
+      <div id="split-labels" aria-hidden="true" data-workbench-ui hidden>
+        <span class="split-tag split-tag-raw">AI 原始瑕疵（滑步 / 抖动）</span>
+        <span class="split-tag split-tag-clean">管线清洗修复（IK 锁脚 / 滤波）</span>
+      </div>
+
+      <!-- Drag-and-Drop Overlay Hint -->
+      <div id="drop-overlay" data-workbench-ui hidden>
+        <div class="drop-box">松开以提取视频 / 图片 3D 动作（支持 .mp4 / .png / .jpg / .bvh）</div>
+      </div>
+
+      <!-- Bottom-Center Minimal Playback & Comparison Bar -->
+      <footer id="bottom-dock" aria-label="播放与对比控制栏" data-workbench-ui>
+        <button
+          type="button"
+          id="btn-play-pause"
+          class="icon-btn"
+          aria-label="暂停或播放 (空格键)"
+          title="播放 / 暂停 (Space)"
+        >
+          暂停
+        </button>
+
+        <div class="scrubber-wrap">
+          <input
+            type="range"
+            id="timeline-scrubber"
+            min="0"
+            max="81"
+            step="0.1"
+            value="0"
+            aria-label="动作时间轴进度"
+          />
+          <span id="lbl-frame" class="frame-counter">00 / 82</span>
+        </div>
+
+        <button
+          type="button"
+          id="btn-speed-cycle"
+          class="mono-btn"
+          title="点击切换播放倍速 (1.0x / 0.5x / 0.25x)"
+        >
+          1.0x
+        </button>
+
+        <button
+          type="button"
+          id="btn-toggle-weapon"
+          class="mono-btn active"
+          aria-pressed="true"
+          title="切换右手佩剑与剑气刀光显示（适用于任意预设或视频提取动作）"
+        >
+          佩剑
+        </button>
+
+        <span class="bar-divider" aria-hidden="true"></span>
+
+        <div id="view-mode-group" class="mode-segmented" role="group" aria-label="动作预览模式">
+          <button type="button" id="mode-clean" class="mode-btn active" data-mode="clean">
+            修复后动作
+          </button>
+          <button type="button" id="mode-raw" class="mode-btn" data-mode="raw">
+            AI 原始瑕疵
+          </button>
+          <button type="button" id="mode-split" class="mode-btn" data-mode="split">
+            左右同屏对比
+          </button>
+        </div>
+
+        <button
+          type="button"
+          id="btn-export-bvh"
+          class="export-btn"
+          title="导出清洗后的标准 .bvh 骨骼动画文件（可直接导入 Blender / Cascadeur / Unity / UE5）"
+        >
+          导出 .BVH
+        </button>
+      </footer>
+    </main>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

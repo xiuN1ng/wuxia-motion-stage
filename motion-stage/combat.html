@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MotionStage — 武侠肉鸽 21 骨骼战斗验证台</title>
+    <meta
+      name="description"
+      content="基于 21 骨骼标准 BVH 动作库的可操控中国武侠动作肉鸽 3D 战斗原型：19 状态动作状态机、Spine/Chest 上下半身分层混合、锁定八向垫步与三模式陪练木桩。"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/src/combat/combat.css" />
+    <style>
+      html,
+      body,
+      #combat-root {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: hsl(216, 13%, 8.5%);
+      }
+    </style>
+  </head>
+  <body>
+    <main id="combat-root" aria-label="武侠肉鸽 3D 战斗验证台"></main>
+    <script type="module" src="/src/combat/combatEntry.js"></script>
+  </body>
+</html>
