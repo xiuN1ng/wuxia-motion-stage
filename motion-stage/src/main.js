@@ -184,7 +184,20 @@ function ensureWorkbenchRenderer() {
 }
 
 let camTransition = null;
+const camRootOffset = new THREE.Vector3(0, 0, 0);
+
+function resetCameraRootFollow() {
+  if (camRootOffset.lengthSq() > 1e-8) {
+    camera.position.sub(camRootOffset);
+    if (controls) {
+      controls.target.sub(camRootOffset);
+    }
+    camRootOffset.set(0, 0, 0);
+  }
+}
+
 function glideCameraToViewMode(mode) {
+  resetCameraRootFollow();
   const endPos =
     mode === 'split'
       ? new THREE.Vector3(0, 1.42, 3.85)
@@ -457,6 +470,7 @@ function loadActiveClip(clip, presetKey = null, { preserveCleanToggles = false }
   state.clipKey = presetKey;
   state.normalizedTime = 0;
   trailHistory.length = 0;
+  resetCameraRootFollow();
   cleanClothSolver.reset(cleanChar.bones);
 
   if (!preserveCleanToggles) {
@@ -1137,11 +1151,15 @@ function updateSwordTrail(inHitstop) {
     slashTrailMesh.visible = false;
     return;
   }
-  slashTrailMesh.visible = true;
 
   const { tipAnchor, baseAnchor } = cleanChar.swordGroup.userData;
   tipAnchor.getWorldPosition(_tipWorld);
   baseAnchor.getWorldPosition(_baseWorld);
+
+  if (!state.playing && !inHitstop) {
+    slashTrailMesh.visible = false;
+    return;
+  }
 
   trailHistory.unshift({ tip: _tipWorld.clone(), base: _baseWorld.clone(), hit: inHitstop });
   if (trailHistory.length > TRAIL_STEPS) trailHistory.pop();
@@ -1149,12 +1167,26 @@ function updateSwordTrail(inHitstop) {
     trailHistory.push({ tip: _tipWorld.clone(), base: _baseWorld.clone(), hit: false });
   }
 
+  // Only illuminate slash ribbon when the blade tip is actively sweeping through space (or in hitstop)
+  let maxTipSpan = 0;
+  const checkCount = Math.min(6, trailHistory.length);
+  for (let j = 1; j < checkCount; j++) {
+    const d = trailHistory[0].tip.distanceTo(trailHistory[j].tip);
+    if (d > maxTipSpan) maxTipSpan = d;
+  }
+  const swingAlpha = inHitstop ? 1.0 : THREE.MathUtils.smoothstep(maxTipSpan, 0.14, 0.34);
+  if (swingAlpha < 0.015) {
+    slashTrailMesh.visible = false;
+    return;
+  }
+  slashTrailMesh.visible = true;
+
   const posArr = trailGeo.attributes.position.array;
   const colArr = trailGeo.attributes.color.array;
 
   for (let i = 0; i < TRAIL_STEPS; i++) {
     const item = trailHistory[i];
-    const fade = Math.pow(1 - i / (TRAIL_STEPS - 1), 1.85);
+    const fade = Math.pow(1 - i / (TRAIL_STEPS - 1), 1.85) * swingAlpha;
     const o = i * 6;
     posArr[o] = item.base.x;
     posArr[o + 1] = item.base.y;
@@ -1176,6 +1208,9 @@ function updateSwordTrail(inHitstop) {
   trailGeo.attributes.position.needsUpdate = true;
   trailGeo.attributes.color.needsUpdate = true;
 }
+
+const _desiredCamOffset = new THREE.Vector3();
+const _camDelta = new THREE.Vector3();
 
 function updateAndRenderStage(now, dt, curSpeed) {
   ensureWorkbenchRenderer();
@@ -1251,6 +1286,29 @@ function updateAndRenderStage(now, dt, curSpeed) {
       rawGhost.bones[i].quaternion.copy(rawPose.quats[i]);
     }
     rawGhost.updateVisuals();
+  }
+
+  // Smoothly track horizontal & aerial Root Motion so lunges, rolls, jumps, and knockdowns stay framed
+  if (!camTransition && controls) {
+    const refPose = state.viewMode === 'raw' ? rawPose : cleanPose;
+    const horizDist = Math.hypot(refPose.rootPos.x, refPose.rootPos.z);
+    const airLift = Math.max(0, refPose.rootPos.y - 0.95) * 0.6;
+    if (horizDist > 0.06 || airLift > 0.04) {
+      _desiredCamOffset.set(
+        state.viewMode === 'split' ? 0 : refPose.rootPos.x,
+        airLift,
+        refPose.rootPos.z
+      );
+    } else {
+      _desiredCamOffset.set(0, 0, 0);
+    }
+    const followAlpha = state.playing ? Math.min(1, Math.max(0.20, dt * 12)) : 1.0;
+    _camDelta.copy(_desiredCamOffset).sub(camRootOffset).multiplyScalar(followAlpha);
+    if (_camDelta.lengthSq() > 1e-8) {
+      camRootOffset.add(_camDelta);
+      camera.position.add(_camDelta);
+      controls.target.add(_camDelta);
+    }
   }
 
   telemetryHUD.updatePlayhead(state.normalizedTime, warpedU, inHitstop);

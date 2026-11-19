@@ -192,6 +192,11 @@ export class SpringClothSolver {
     this._invHips = new THREE.Matrix4();
     this._kneeL = new THREE.Vector3();
     this._kneeR = new THREE.Vector3();
+    this._qChest = new THREE.Quaternion();
+    this._qChestInv = new THREE.Quaternion();
+    this._chestUp = new THREE.Vector3();
+    this._chestFwd = new THREE.Vector3();
+    this._vLocal = new THREE.Vector3();
   }
 
   reset(bones) {
@@ -230,6 +235,11 @@ export class SpringClothSolver {
 
     bones[0].updateWorldMatrix(true, true);
     bones[BONE_IDX.Chest].getWorldPosition(this._chestWorld);
+    bones[BONE_IDX.Chest].getWorldQuaternion(this._qChest);
+    this._qChestInv.copy(this._qChest).invert();
+    this._chestUp.set(0, 1, 0).applyQuaternion(this._qChest);
+    this._chestFwd.set(0, 0, 1).applyQuaternion(this._qChest);
+
     if (!Number.isFinite(this._chestWorld.x + this._chestWorld.y + this._chestWorld.z)) {
       this._chestWorld.set(0, 1.3, 0);
     }
@@ -239,16 +249,25 @@ export class SpringClothSolver {
       this.initialized = true;
     }
 
-    let vx = 0;
-    let vy = 0;
-    let vz = safeForwardSpeed;
+    let vxWorld = this._chestFwd.x * safeForwardSpeed;
+    let vyWorld = 0;
+    let vzWorld = this._chestFwd.z * safeForwardSpeed;
     if (clampedDt > 0) {
       const denom = Math.max(clampedDt, 0.008);
-      vx = (this._chestWorld.x - this.prevChestPos.x) / denom;
-      vy = (this._chestWorld.y - this.prevChestPos.y) / denom;
-      vz = (this._chestWorld.z - this.prevChestPos.z) / denom + safeForwardSpeed;
+      vxWorld += (this._chestWorld.x - this.prevChestPos.x) / denom;
+      vyWorld = (this._chestWorld.y - this.prevChestPos.y) / denom;
+      vzWorld += (this._chestWorld.z - this.prevChestPos.z) / denom;
       this.prevChestPos.copy(this._chestWorld);
     }
+
+    // Transform world velocity into Chest local frame (360° yaw-invariant & roll-safe)
+    this._vLocal.set(vxWorld, vyWorld, vzWorld).applyQuaternion(this._qChestInv);
+    const vx = this._vLocal.x;
+    const vy = this._vLocal.y;
+    const vz = this._vLocal.z;
+
+    // Smoothly tuck cape against back when torso is inverted or supine (rolls, backflips, knockdowns)
+    const uprightFactor = THREE.MathUtils.smoothstep(this._chestUp.y, -0.05, 0.65);
 
     // Exact 3D knee positions in Hips local space for zero-penetration skirt & cape clearance
     this._invHips.copy(bones[BONE_IDX.Hips].matrixWorld).invert();
@@ -273,18 +292,24 @@ export class SpringClothSolver {
         const stiffness = 26 - i * 3.5;
         const damping = 5.4 - i * 0.45;
         const windFlutter =
-          Math.sin(performance.now() * 0.0065 - i * 1.15) * (0.03 + 0.045 * Math.min(1, Math.abs(vz)));
+          Math.sin(performance.now() * 0.0065 - i * 1.15) *
+          (0.03 + 0.045 * Math.min(1, Math.abs(vz))) *
+          uprightFactor;
 
-        // Positive rotation.x tilts -Y cape bone backward (-Z), clearing back and thighs
-        const targetPitch =
+        // Positive rotation.x tilts -Y cape bone backward (-Z), clearing back and thighs when upright;
+        // smoothly tucks along the back when inverted/supine so it never shoots skyward as a vertical board
+        const uprightPitch =
           0.12 +
           THREE.MathUtils.clamp(vz * 0.16, -0.06, 0.55) +
           THREE.MathUtils.clamp(-vy * 0.08, -0.10, 0.26) +
           (i >= 1 ? maxBackwardKick * 0.52 : maxBackwardKick * 0.22) +
           windFlutter;
+        const tuckedPitch = 0.09 + i * 0.024;
+        const targetPitch = THREE.MathUtils.lerp(tuckedPitch, uprightPitch, uprightFactor);
 
-        const parentFollow = i > 0 ? this.capeAnglesX[i - 1] * 0.25 : 0;
-        const desiredX = THREE.MathUtils.clamp(targetPitch + parentFollow, 0.08, 0.92);
+        const parentFollow = i > 0 ? this.capeAnglesX[i - 1] * 0.25 * uprightFactor : 0;
+        const maxPitchCap = THREE.MathUtils.lerp(0.22, 0.92, uprightFactor);
+        const desiredX = THREE.MathUtils.clamp(targetPitch + parentFollow, 0.08, maxPitchCap);
 
         const accX = (desiredX - this.capeAnglesX[i]) * stiffness - this.capeVelX[i] * damping;
         this.capeVelX[i] += accX * clampedDt;
@@ -293,7 +318,12 @@ export class SpringClothSolver {
           this.capeAnglesX[i] = Math.max(0.08, this.capeAnglesX[i]);
         }
 
-        const targetRoll = THREE.MathUtils.clamp(-vx * 0.14 - chestTwistY * (0.24 + i * 0.06), -0.46, 0.46);
+        const rollCap = THREE.MathUtils.lerp(0.16, 0.46, uprightFactor);
+        const targetRoll = THREE.MathUtils.clamp(
+          (-vx * 0.14 - chestTwistY * (0.24 + i * 0.06)) * uprightFactor,
+          -rollCap,
+          rollCap
+        );
         const accZ = (targetRoll - this.capeAnglesZ[i]) * (stiffness * 0.85) - this.capeVelZ[i] * damping;
         this.capeVelZ[i] += accZ * clampedDt;
         this.capeAnglesZ[i] += this.capeVelZ[i] * clampedDt;

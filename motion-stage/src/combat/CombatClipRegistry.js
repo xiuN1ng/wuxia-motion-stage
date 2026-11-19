@@ -650,6 +650,13 @@ export function normalizeCombatClip(id, rawFrames, fps = 60, options = {}) {
       }
       fr.rootPos.set(0, adjY, 0);
     }
+    if (id === '05_front_kick') {
+      const uKick = f / Math.max(1, N - 1);
+      const kickPulse = Math.sin(uKick * Math.PI);
+      applyWuxiaSwordGuardOverlay(fr, kickPulse, 0.86);
+      addLocalEuler(fr.quats[BONE_IDX.LeftUpperArm], -0.22 * kickPulse, -0.15 * kickPulse, 0);
+      addLocalEuler(fr.quats[BONE_IDX.RightUpperArm], 0.18 * kickPulse, -0.18 * kickPulse, 0);
+    }
     frames[f] = fr;
   }
 
@@ -739,11 +746,11 @@ function buildProceduralBreathingIdleRaw(frameCount = 90) {
     addLocalEuler(fr.quats[BONE_IDX.RightUpLeg], 0.06, -0.08, -0.06);
     addLocalEuler(fr.quats[BONE_IDX.RightLeg], 0.14, 0, 0);
     addLocalEuler(fr.quats[BONE_IDX.RightFoot], -0.18, 0, 0);
-    // Relaxed arms down-forward
-    addLocalEuler(fr.quats[BONE_IDX.LeftUpperArm], 0.25, 0.35, 1.05);
-    addLocalEuler(fr.quats[BONE_IDX.LeftForeArm], 0.15, 0.55, 0.10);
-    addLocalEuler(fr.quats[BONE_IDX.RightUpperArm], 0.32, -0.42, -1.02);
-    addLocalEuler(fr.quats[BONE_IDX.RightForeArm], 0.20, -0.68, -0.12);
+    // Relaxed Wuxia guard arms lowered naturally in front
+    addLocalEuler(fr.quats[BONE_IDX.LeftUpperArm], -0.22, -0.28, -1.24);
+    addLocalEuler(fr.quats[BONE_IDX.LeftForeArm], 1.55, 0.16, 1.62);
+    addLocalEuler(fr.quats[BONE_IDX.RightUpperArm], -0.18, 0.25, 1.18);
+    addLocalEuler(fr.quats[BONE_IDX.RightForeArm], 1.18, 0.18, -1.35);
     frames.push(fr);
   }
   return frames;
@@ -751,20 +758,21 @@ function buildProceduralBreathingIdleRaw(frameCount = 90) {
 
 function applyWuxiaSwordGuardOverlay(frame, breath = 0, intensity = 1.0) {
   const guardPose = {
-    [BONE_IDX.LeftShoulder]: [0.05, 0.12, 0.10],
-    [BONE_IDX.LeftUpperArm]: [0.42, 0.58, 0.92],
-    [BONE_IDX.LeftForeArm]: [0.22, 0.88, 0.18],
-    [BONE_IDX.LeftHand]: [0.08, 0.15, -0.12],
-    [BONE_IDX.RightShoulder]: [0.06, -0.16, -0.08],
-    [BONE_IDX.RightUpperArm]: [0.48 + breath * 0.02, -0.52, -0.86],
-    [BONE_IDX.RightForeArm]: [0.26, -0.92, -0.22],
-    [BONE_IDX.RightHand]: [0.28, -0.35, 0.16 + breath * 0.02],
+    [BONE_IDX.LeftShoulder]: [0.02, 0.05, -0.03],
+    [BONE_IDX.LeftUpperArm]: [-0.226, -0.305, -1.272],
+    [BONE_IDX.LeftForeArm]: [1.787, 0.159, 1.774],
+    [BONE_IDX.LeftHand]: [-0.030, 0.186, -0.091],
+    [BONE_IDX.RightShoulder]: [0.02, -0.05, 0.03],
+    [BONE_IDX.RightUpperArm]: [-0.183 + breath * 0.02, 0.264, 1.210],
+    [BONE_IDX.RightForeArm]: [1.229, 0.196, -1.409],
+    [BONE_IDX.RightHand]: [0.757, -0.547, 0.945 + breath * 0.02],
   };
   const tmp = new THREE.Quaternion();
   for (const [idxStr, [rx, ry, rz]] of Object.entries(guardPose)) {
     const idx = Number(idxStr);
     tmp.setFromEuler(new THREE.Euler(rx, ry, rz, 'XYZ'));
-    frame.quats[idx].slerp(tmp, intensity);
+    if (frame.quats[idx].dot(tmp) < 0) tmp.set(-tmp.x, -tmp.y, -tmp.z, -tmp.w);
+    frame.quats[idx].slerp(tmp, intensity).normalize();
   }
 }
 

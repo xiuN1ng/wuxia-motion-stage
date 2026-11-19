@@ -710,6 +710,45 @@ export function calibrateVideoSequenceMetrics(frames) {
   }
 }
 
+function alignCapturedSequenceToPlusZ(frames, useWholeClipMean = false) {
+  if (!frames || frames.length === 0) return;
+  const { bones } = createBoneHierarchy();
+  const sampleEnd = useWholeClipMean ? frames.length : Math.min(frames.length, 6);
+  const sumFwd = new THREE.Vector3();
+  const qH = new THREE.Quaternion();
+  const qC = new THREE.Quaternion();
+  const fH = new THREE.Vector3();
+  const fC = new THREE.Vector3();
+
+  for (let i = 0; i < sampleEnd; i++) {
+    const fr = frames[i];
+    bones[0].position.set(0, 0, 0);
+    for (let b = 0; b < NUM_BONES; b++) bones[b].quaternion.copy(fr.quats[b]);
+    bones[0].updateWorldMatrix(true, true);
+    bones[BONE_IDX.Hips].getWorldQuaternion(qH);
+    bones[BONE_IDX.Chest].getWorldQuaternion(qC);
+    fH.set(0, 0, 1).applyQuaternion(qH);
+    fC.set(0, 0, 1).applyQuaternion(qC);
+    fH.y = 0;
+    fC.y = 0;
+    if (fH.lengthSq() > 1e-5) sumFwd.add(fH.normalize());
+    if (fC.lengthSq() > 1e-5) sumFwd.add(fC.normalize());
+  }
+
+  const baseYaw = sumFwd.lengthSq() > 1e-5 ? Math.atan2(sumFwd.x, sumFwd.z) : 0;
+  const qRotY = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -baseYaw);
+  const p0x = frames[0].rootPos.x;
+  const p0z = frames[0].rootPos.z;
+  const delta = new THREE.Vector3();
+
+  for (const fr of frames) {
+    delta.set(fr.rootPos.x - p0x, 0, fr.rootPos.z - p0z).applyQuaternion(qRotY);
+    fr.rootPos.x = p0x + delta.x;
+    fr.rootPos.z = p0z + delta.z;
+    fr.quats[BONE_IDX.Hips].premultiply(qRotY).normalize();
+  }
+}
+
 /**
  * Extracts a 3D motion clip from an uploaded Image file (.png/.jpg/.webp)
  */
@@ -1063,6 +1102,7 @@ export async function extractClipFromVideoSource(source, onProgress, options = {
     }
 
     calibrateVideoSequenceMetrics(frames);
+    alignCapturedSequenceToPlusZ(frames, !Boolean(mergedOpts.nonCyclic ?? true));
 
     const clipId = mergedOpts.id || mergedOpts.clipId || 'captured_video';
     const clipName = mergedOpts.name || mergedOpts.clipName || mergedOpts.label || '视频捕捉';

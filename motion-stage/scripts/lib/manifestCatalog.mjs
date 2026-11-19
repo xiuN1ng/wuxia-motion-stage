@@ -474,7 +474,7 @@ export const CLIP_CATALOG_26 = [
     archetype: 'Air_Jump_Double',
     direction: null,
     cyclic: false,
-    hasWeapon: true,
+    hasWeapon: false,
     preserveRootMotion: true,
     driveFileId: null,
     sourceProvenance:
@@ -496,7 +496,7 @@ export const CLIP_CATALOG_26 = [
     archetype: 'Hit_Light_L',
     direction: 'L',
     cyclic: false,
-    hasWeapon: true,
+    hasWeapon: false,
     preserveRootMotion: true,
     driveFileId: null,
     sourceProvenance:
@@ -518,7 +518,7 @@ export const CLIP_CATALOG_26 = [
     archetype: 'Hit_Light_R',
     direction: 'R',
     cyclic: false,
-    hasWeapon: true,
+    hasWeapon: false,
     preserveRootMotion: true,
     driveFileId: null,
     sourceProvenance:

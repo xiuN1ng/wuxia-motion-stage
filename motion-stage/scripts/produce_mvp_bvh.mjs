@@ -112,21 +112,43 @@ function slerpHemisphere(qBase, qTarget, alpha) {
 }
 
 const TAIBAI_GUARD_LOCAL = {
-  [BONE_IDX.RightShoulder]: new THREE.Quaternion().setFromEuler(new THREE.Euler(0.02, 0.06, -0.04)),
-  [BONE_IDX.RightUpperArm]: new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.18, 0.18, 1.02)),
-  [BONE_IDX.RightForeArm]: new THREE.Quaternion().setFromEuler(new THREE.Euler(0.15, 0.38, 0.10)),
-  [BONE_IDX.RightHand]: new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.55, 0.35, 0.45)),
-  [BONE_IDX.LeftShoulder]: new THREE.Quaternion().setFromEuler(new THREE.Euler(0.02, -0.04, 0.04)),
-  [BONE_IDX.LeftUpperArm]: new THREE.Quaternion().setFromEuler(new THREE.Euler(0.52, 0.42, -0.82)),
-  [BONE_IDX.LeftForeArm]: new THREE.Quaternion().setFromEuler(new THREE.Euler(0.35, -1.05, 0.25)),
-  [BONE_IDX.LeftHand]: new THREE.Quaternion().setFromEuler(new THREE.Euler(0.10, -0.20, 0.15)),
+  [BONE_IDX.RightShoulder]: new THREE.Quaternion().setFromEuler(new THREE.Euler(0.02, -0.05, 0.03)),
+  [BONE_IDX.RightUpperArm]: new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.183, 0.264, 1.210)),
+  [BONE_IDX.RightForeArm]: new THREE.Quaternion().setFromEuler(new THREE.Euler(1.229, 0.196, -1.409)),
+  [BONE_IDX.RightHand]: new THREE.Quaternion().setFromEuler(new THREE.Euler(0.757, -0.547, 0.945)),
+  [BONE_IDX.LeftShoulder]: new THREE.Quaternion().setFromEuler(new THREE.Euler(0.02, 0.05, -0.03)),
+  [BONE_IDX.LeftUpperArm]: new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.226, -0.305, -1.272)),
+  [BONE_IDX.LeftForeArm]: new THREE.Quaternion().setFromEuler(new THREE.Euler(1.787, 0.159, 1.774)),
+  [BONE_IDX.LeftHand]: new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.030, 0.186, -0.091)),
 };
 
-function applyTaibaiArmGuard(frames, weight = 0.80) {
-  for (const fr of frames) {
+function applyTaibaiArmGuard(frames, weight = 0.80, { cyclicStrideSway = false } = {}) {
+  const N = frames.length;
+  for (let f = 0; f < N; f++) {
+    const fr = frames[f];
     for (const [bStr, qGuard] of Object.entries(TAIBAI_GUARD_LOCAL)) {
       const b = Number(bStr);
       fr.quats[b].copy(slerpHemisphere(fr.quats[b], qGuard, weight));
+    }
+    if (cyclicStrideSway && N > 2) {
+      const phase = (f / (N - 1)) * Math.PI * 2;
+      const s = Math.sin(phase);
+      const c = Math.cos(phase);
+      fr.quats[BONE_IDX.Spine].multiply(
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(0.028 * c, 0.042 * s, 0.018 * s))
+      ).normalize();
+      fr.quats[BONE_IDX.Chest].multiply(
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(0.032 * c, 0.048 * s, -0.020 * s))
+      ).normalize();
+      fr.quats[BONE_IDX.LeftUpperArm].multiply(
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(0.055 * s, -0.040 * c, 0.032 * c))
+      ).normalize();
+      fr.quats[BONE_IDX.RightUpperArm].multiply(
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.045 * s, 0.038 * c, -0.028 * c))
+      ).normalize();
+      fr.quats[BONE_IDX.RightHand].multiply(
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(0.035 * c, -0.028 * s, 0.025 * s))
+      ).normalize();
     }
   }
 }
@@ -176,7 +198,7 @@ function alignStartFacingToPlusZ(frames, refFrameIdx = 0) {
  * 4-Step Cyclic 8-Way Treadmill Strafe Builder (m2_exp2 §2.2):
  * 1. Align world movement vector to exact targetDeg.
  * 2. Clamp pelvis yaw within ±10° of +Z while preserving world leg directions, orient Spine/Chest/Head to +Z,
- *    and blend 80% Wuxia Taibai sword guard.
+ *    and blend Wuxia Taibai sword guard with cyclic stride counter-sway.
  * 3. Filter & lock feet in world mocap space (y = 8.0cm).
  * 4. Subtract linear treadmill displacement & apply C1 loop closure (seam = 0.00cm).
  */
@@ -263,7 +285,7 @@ function buildStrafeClip(rawText, { start120, end120, speedScale, targetDeg }) {
     fr.quats[BONE_IDX.Head].copy(bones[BONE_IDX.Head].quaternion);
   }
 
-  applyTaibaiArmGuard(frames, 0.80);
+  applyTaibaiArmGuard(frames, 0.82, { cyclicStrideSway: true });
 
   // Step 3: World-space zero-phase smoothing + Analytic Two-Bone IK foot-lock
   frames = filterFramesZeroPhase(frames, 2, false);
