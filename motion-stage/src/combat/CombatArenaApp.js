@@ -34,7 +34,7 @@ function buildWuxiaMartialArenaEnvironment(scene) {
   const keyLight = new THREE.DirectionalLight(0xfff2de, 2.35);
   keyLight.position.set(6.5, 11.5, 5.5);
   keyLight.castShadow = true;
-  keyLight.shadow.mapSize.set(2048, 2048);
+  keyLight.shadow.mapSize.set(1024, 1024);
   const shadowSpan = 9.6;
   keyLight.shadow.camera.left = -shadowSpan;
   keyLight.shadow.camera.right = shadowSpan;
@@ -882,12 +882,11 @@ export function createCombatArena(containerEl = null, options = {}) {
       attachWindowListeners();
       syncViewportSize();
       updateHudFromCurrentState();
-      if (renderer) {
-        renderer.render(scene, combatCamera.camera);
-      }
       if (!headless && typeof requestAnimationFrame === 'function') {
         lastRafMs = performance.now();
         rafId = requestAnimationFrame(onAnimationFrame);
+      } else if (renderer) {
+        renderer.render(scene, combatCamera.camera);
       }
     }
   }

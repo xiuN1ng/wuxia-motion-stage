@@ -93,7 +93,7 @@ export function createStaticRangeMiddleware(mounts) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Content-Type', contentType);
-    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Cache-Control', ext === '.bvh' ? 'public, max-age=300' : 'no-cache');
 
     const rangeHeader = req.headers?.range;
     if (rangeHeader) {
