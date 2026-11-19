@@ -18,6 +18,7 @@ import {
 import { CombatCamera } from './CombatCamera.js';
 import { CombatVFX } from './CombatVFX.js';
 import { CombatHUD } from './CombatHUD.js';
+import { isSoftwareWebGL } from '../capture/VideoPoseCapture.js';
 
 if (typeof document !== 'undefined') {
   import('./combat.css').catch(() => {});
@@ -236,6 +237,7 @@ export function createCombatArena(containerEl = null, options = {}) {
   let isDestroyed = false;
   let rafId = 0;
   let lastRafMs = 0;
+  let lastRenderWallMs = -Infinity;
 
   // DOM & WebGL handles (created in browser mode)
   let rootEl = null;
@@ -562,6 +564,15 @@ export function createCombatArena(containerEl = null, options = {}) {
     });
   }
 
+  function renderIfDue(force = false) {
+    if (!renderer) return;
+    const nowWallMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (force || nowWallMs - lastRenderWallMs >= 16) {
+      lastRenderWallMs = nowWallMs;
+      renderer.render(scene, combatCamera.camera);
+    }
+  }
+
   /**
    * Advances simulation deterministically by `dt` seconds (sub-stepping large `dt` into `<= 1/60s` ticks).
    */
@@ -579,9 +590,7 @@ export function createCombatArena(containerEl = null, options = {}) {
     }
 
     updateHudFromCurrentState();
-    if (renderer) {
-      renderer.render(scene, combatCamera.camera);
-    }
+    renderIfDue(false);
     return getState();
   }
 
@@ -637,7 +646,7 @@ export function createCombatArena(containerEl = null, options = {}) {
       hitSwingRegistry.clear();
       syncPlayerAndDummyPosesInitial();
       updateHudFromCurrentState();
-      if (renderer) renderer.render(scene, combatCamera.camera);
+      renderIfDue(true);
       return getState();
     }
 
@@ -884,7 +893,16 @@ export function createCombatArena(containerEl = null, options = {}) {
       updateHudFromCurrentState();
       if (!headless && typeof requestAnimationFrame === 'function') {
         lastRafMs = performance.now();
-        rafId = requestAnimationFrame(onAnimationFrame);
+        if (simTimeSec === 0 && typeof setTimeout === 'function') {
+          setTimeout(() => {
+            if (isActive && !isDestroyed && !rafId) {
+              lastRafMs = performance.now();
+              rafId = requestAnimationFrame(onAnimationFrame);
+            }
+          }, 35);
+        } else {
+          rafId = requestAnimationFrame(onAnimationFrame);
+        }
       } else if (renderer) {
         renderer.render(scene, combatCamera.camera);
       }
@@ -917,10 +935,14 @@ export function createCombatArena(containerEl = null, options = {}) {
     const w = Math.max(1, containerEl.clientWidth || window.innerWidth || 1280);
     const h = Math.max(1, containerEl.clientHeight || window.innerHeight || 720);
 
-    renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    const softwareGpu = isSoftwareWebGL();
+    renderer = new THREE.WebGLRenderer({
+      antialias: !softwareGpu,
+      powerPreference: 'high-performance',
+    });
+    renderer.setPixelRatio(softwareGpu ? 1 : Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(w, h, false);
-    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.enabled = !softwareGpu;
     renderer.shadowMap.type = THREE.PCFShadowMap; // Zero Three.js r183+ deprecation warning!
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.08;
@@ -1020,16 +1042,23 @@ export function createCombatArena(containerEl = null, options = {}) {
       },
       sig
     );
+    window.addEventListener('pagehide', destroy, { once: true, signal: pointerAbortCtrl.signal });
+    window.addEventListener('beforeunload', destroy, {
+      once: true,
+      signal: pointerAbortCtrl.signal,
+    });
   }
 
   async function mount() {
     if (isDestroyed) return api;
+    const clipsPromise = clipRegistry.loadAll(options.clipLoaderOptions || {});
     if (!isMounted) {
       initDomAndRenderer();
       isMounted = true;
     }
 
-    await clipRegistry.loadAll(options.clipLoaderOptions || {});
+    await clipsPromise;
+    if (isDestroyed) return api;
 
     // Re-evaluate initial frame with upgraded `bvh_library` clips
     syncPlayerAndDummyPosesInitial();
@@ -1074,8 +1103,12 @@ export function createCombatArena(containerEl = null, options = {}) {
     });
 
     if (renderer) {
+      renderer.domElement?.addEventListener?.('webglcontextlost', (e) => e.preventDefault(), {
+        once: true,
+      });
       renderer.renderLists?.dispose?.();
       renderer.dispose();
+      renderer.forceContextLoss?.();
       renderer = null;
     }
 

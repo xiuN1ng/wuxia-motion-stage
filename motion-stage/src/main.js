@@ -1734,3 +1734,27 @@ window.__MOTION_STAGE__ = {
   },
   getAssetCatalog: () => assetCatalog.map((x) => ({ ...x })),
 };
+
+function releasePageWebGLResources() {
+  if (rafId) {
+    cancelAnimationFrame(rafId);
+    rafId = 0;
+  }
+  if (combatArena) {
+    combatArena.destroy();
+    combatArena = null;
+  }
+  if (renderer) {
+    renderer.domElement?.addEventListener?.('webglcontextlost', (e) => e.preventDefault(), {
+      once: true,
+    });
+    renderer.renderLists?.dispose?.();
+    renderer.dispose();
+    renderer.forceContextLoss?.();
+    renderer = null;
+  }
+}
+
+window.addEventListener('pagehide', releasePageWebGLResources, { once: true });
+window.addEventListener('beforeunload', releasePageWebGLResources, { once: true });
+

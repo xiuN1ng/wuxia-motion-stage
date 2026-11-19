@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 
@@ -21,6 +22,8 @@ const MIME_BY_EXT = {
 };
 
 export function createStaticRangeMiddleware(mounts) {
+  const bvhMemCache = new Map();
+
   return (req, res, next) => {
     if (!req.url || (req.method !== 'GET' && req.method !== 'HEAD')) {
       return next();
@@ -139,6 +142,33 @@ export function createStaticRangeMiddleware(mounts) {
         res.destroy?.();
       });
       stream.pipe(res);
+      return;
+    }
+
+    if (ext === '.bvh') {
+      let entry = bvhMemCache.get(fullPath);
+      if (!entry || entry.mtimeMs !== stat.mtimeMs || entry.size !== total) {
+        const raw = fs.readFileSync(fullPath);
+        const gzip = zlib.gzipSync(raw, { level: 1 });
+        entry = { mtimeMs: stat.mtimeMs, size: total, raw, gzip };
+        bvhMemCache.set(fullPath, entry);
+      }
+      res.setHeader('Vary', 'Accept-Encoding');
+      const acceptsGzip =
+        req.method === 'GET' && /\bgzip\b/i.test(String(req.headers?.['accept-encoding'] || ''));
+      res.statusCode = 200;
+      if (acceptsGzip) {
+        res.setHeader('Content-Encoding', 'gzip');
+        res.setHeader('Content-Length', String(entry.gzip.length));
+        res.end(entry.gzip);
+        return;
+      }
+      res.setHeader('Content-Length', String(entry.raw.length));
+      if (req.method === 'HEAD') {
+        res.end();
+        return;
+      }
+      res.end(entry.raw);
       return;
     }
 
