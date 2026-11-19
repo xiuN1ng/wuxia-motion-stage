@@ -1,9 +1,21 @@
 import * as THREE from 'three';
-import { PoseLandmarker } from '@mediapipe/tasks-vision';
-import ModuleFactory from '@mediapipe/tasks-vision/vision_wasm_module_internal.js';
 import { BONE_DEFS, BONE_IDX, createBoneHierarchy } from '../rig/HumanoidRig.js';
 
 const NUM_BONES = BONE_DEFS.length;
+
+let mediaPipeSdkPromise = null;
+function ensureMediaPipeSdk() {
+  if (!mediaPipeSdkPromise) {
+    mediaPipeSdkPromise = Promise.all([
+      import('@mediapipe/tasks-vision'),
+      import('@mediapipe/tasks-vision/vision_wasm_module_internal.js'),
+    ]).then(([visionMod, wasmFactoryMod]) => ({
+      PoseLandmarker: visionMod.PoseLandmarker,
+      ModuleFactory: wasmFactoryMod.default || wasmFactoryMod,
+    }));
+  }
+  return mediaPipeSdkPromise;
+}
 
 let runtimeAssetsPromise = null;
 let landmarkerVideo = null;
@@ -136,6 +148,7 @@ async function ensureRuntimeAssets(onStatus) {
 }
 
 async function createSingleLandmarker(compiledWasm, modelBytes, runningMode, delegate) {
+  const { PoseLandmarker, ModuleFactory } = await ensureMediaPipeSdk();
   globalThis.ModuleFactory = ModuleFactory;
   globalThis.Module = {
     instantiateWasm(imports, successCallback) {
