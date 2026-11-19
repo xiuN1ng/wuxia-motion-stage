@@ -1,0 +1,22 @@
+{
+  "name": "threejs-anim-lab",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node --test tests/unit_workbench/*.mjs tests/unit_assets/*.mjs tests/unit_combat/*.mjs",
+    "produce-bvh": "node scripts/produce_mvp_bvh.mjs",
+    "extract-taibai": "node scripts/batch_extract.mjs",
+    "sync-drive": "node scripts/sync_drive_and_manifest.mjs"
+  },
+  "devDependencies": {
+    "vite": "^8.3.6"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^1.2.3",
+    "three": "^0.187.0"
+  }
+}

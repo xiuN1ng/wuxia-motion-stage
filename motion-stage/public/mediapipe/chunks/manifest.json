@@ -1,0 +1,34 @@
+{
+  "wasm": {
+    "totalBytes": 14665738,
+    "parts": [
+      "wasm.00.bin",
+      "wasm.01.bin",
+      "wasm.02.bin",
+      "wasm.03.bin",
+      "wasm.04.bin",
+      "wasm.05.bin",
+      "wasm.06.bin"
+    ]
+  },
+  "model": {
+    "totalBytes": 30664242,
+    "parts": [
+      "model.00.bin",
+      "model.01.bin",
+      "model.02.bin",
+      "model.03.bin",
+      "model.04.bin",
+      "model.05.bin",
+      "model.06.bin",
+      "model.07.bin",
+      "model.08.bin",
+      "model.09.bin",
+      "model.10.bin",
+      "model.11.bin",
+      "model.12.bin",
+      "model.13.bin",
+      "model.14.bin"
+    ]
+  }
+}

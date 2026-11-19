@@ -1,0 +1,12 @@
+Demo Reference Video Attribution
+================================
+File: taibai_wuhen_jianyi.mp4 (3.02s excerpt, 39.36s–42.38s)
+Source: "Beijing Wushu Team - 2012 Tour.ogv" (Athlete: Li Xinyu, World Wushu Champion)
+Origin: https://commons.wikimedia.org/wiki/File:Beijing_Wushu_Team_-_2012_Tour.ogv
+Author: Beijing Wushu Team / Pacific Wushu
+License: Creative Commons Attribution 3.0 Unported (CC BY 3.0)
+https://creativecommons.org/licenses/by/3.0/deed.en
+
+Used in MotionStage strictly as an open-licensed Chinese Wushu reference clip
+to validate single-camera 3D pose extraction, Two-Bone IK foot-locking, and
+sword-orientation retargeting for Wuxia action animation research.
