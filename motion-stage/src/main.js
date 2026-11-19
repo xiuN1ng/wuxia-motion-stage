@@ -134,14 +134,41 @@ camera.position.set(1.55, 1.38, 2.85);
 
 let renderer = null;
 let controls = null;
+let cachedSoftwareGpu = null;
+
+function detectSoftwareWebGL() {
+  if (cachedSoftwareGpu !== null) return cachedSoftwareGpu;
+  try {
+    const probe = document.createElement('canvas');
+    const gl = probe.getContext('webgl2') || probe.getContext('webgl');
+    if (!gl) {
+      cachedSoftwareGpu = false;
+      return false;
+    }
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    const str = String(
+      (dbg && gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) || gl.getParameter(gl.RENDERER) || ''
+    );
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    cachedSoftwareGpu = /SwiftShader|llvmpipe|Software|SubZero/i.test(str);
+    return cachedSoftwareGpu;
+  } catch {
+    cachedSoftwareGpu = false;
+    return false;
+  }
+}
 
 function ensureWorkbenchRenderer() {
   if (renderer) return;
-  renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  const softwareGpu = detectSoftwareWebGL();
+  renderer = new THREE.WebGLRenderer({
+    antialias: !softwareGpu,
+    powerPreference: 'high-performance',
+  });
+  renderer.setPixelRatio(softwareGpu ? 1 : Math.min(window.devicePixelRatio, 2));
   renderer.setSize(Math.max(1, container.clientWidth), Math.max(1, container.clientHeight));
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.enabled = !softwareGpu;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.08;
   container.appendChild(renderer.domElement);
@@ -792,7 +819,7 @@ async function loadCatalogAssetItem(item) {
   }
 
   if (item.kind === 'bvh' && item.path) {
-    const resp = await fetch(encodeURI(item.path), { cache: 'no-store' });
+    const resp = await fetch(encodeURI(item.path));
     if (resp.ok) {
       const bvhText = await resp.text();
       if (bvhText.includes('HIERARCHY') && bvhText.includes('MOTION')) {
