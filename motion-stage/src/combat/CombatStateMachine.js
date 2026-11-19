@@ -825,7 +825,7 @@ export class CombatStateMachine {
     }
 
     // Do not queue redundant 3rd/4th mid-air jumps once double-jump charge is spent
-    if ((norm === 'Jump' || norm === 'Air_Jump_Double') && this.doubleJumpUsed) {
+    if ((norm === 'Jump' || norm === 'Air_Jump_Double') && !this.doubleJumpAvailable) {
       return { executed: false, buffered: false, state: this.currentState };
     }
 
@@ -1379,6 +1379,7 @@ export class CombatStateMachine {
         this.playerWorldPos.y = Math.sin(phase * Math.PI) * 1.15;
       } else {
         this.playerWorldPos.y = 0;
+        this.doubleJumpAvailable = true;
       }
       this.velY = 0;
     } else if (this.currentState === 'Jump' || this.currentState === 'Air_Jump_Double' || this.playerWorldPos.y > 0 || this.velY > 0) {

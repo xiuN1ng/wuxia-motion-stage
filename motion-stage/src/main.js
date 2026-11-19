@@ -121,15 +121,6 @@ let rafId = null;
 
 // --- Three.js Minimalist Stage Setup ---
 const container = document.getElementById('canvas-container');
-const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setSize(Math.max(1, container.clientWidth), Math.max(1, container.clientHeight));
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.08;
-container.appendChild(renderer.domElement);
-
 const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0x111419, 0.075);
 
@@ -141,13 +132,29 @@ const camera = new THREE.PerspectiveCamera(
 );
 camera.position.set(1.55, 1.38, 2.85);
 
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.dampingFactor = 0.08;
-controls.target.set(0, 0.94, 0);
-controls.minDistance = 0.75;
-controls.maxDistance = 9.0;
-controls.maxPolarAngle = Math.PI * 0.495;
+let renderer = null;
+let controls = null;
+
+function ensureWorkbenchRenderer() {
+  if (renderer) return;
+  renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(Math.max(1, container.clientWidth), Math.max(1, container.clientHeight));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.08;
+  container.appendChild(renderer.domElement);
+
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.target.set(0, 0.94, 0);
+  controls.minDistance = 0.75;
+  controls.maxDistance = 9.0;
+  controls.maxPolarAngle = Math.PI * 0.495;
+  controls.enabled = Boolean(state.workbenchActive);
+}
 
 let camTransition = null;
 function glideCameraToViewMode(mode) {
@@ -159,7 +166,7 @@ function glideCameraToViewMode(mode) {
   camTransition = {
     startPos: camera.position.clone(),
     endPos,
-    startTarget: controls.target.clone(),
+    startTarget: controls ? controls.target.clone() : new THREE.Vector3(0, 0.94, 0),
     endTarget,
     t: 0,
   };
@@ -325,6 +332,7 @@ const workbenchPanel = createWorkbenchPanel(workbenchDrawerEl, {
     exportCurrentBVH({ triggerDownload: true });
   },
   onResetDefaults: () => {
+    ensureActiveClip();
     state.cleanOptions = {
       ...DEFAULT_CLEAN_OPTIONS,
       loopClean: !Boolean(activeClip.nonCyclic),
@@ -350,6 +358,7 @@ fetchAssetCatalog().then((loaded) => {
 });
 
 function evaluateCurrentRemap(u) {
+  ensureActiveClip();
   return remapCombatTime(
     u,
     Boolean(activeClip.isCombatAttack),
@@ -362,7 +371,7 @@ function evaluateCurrentRemap(u) {
 }
 
 function syncTelemetryHUD() {
-  if (!pipelineResult) return;
+  if (!pipelineResult || !activeClip) return;
   const fastRemapFn = createCombatTimeRemapper(
     activeClip,
     state.combatCurve,
@@ -379,7 +388,7 @@ function syncTelemetryHUD() {
 }
 
 function syncStageVisibility() {
-  const hasSword = Boolean(activeClip.hasWeapon);
+  const hasSword = Boolean(activeClip?.hasWeapon);
   cleanChar.swordGroup.visible = hasSword;
   rawChar.swordGroup.visible = hasSword;
   if (weaponBtn) {
@@ -398,6 +407,7 @@ function syncStageVisibility() {
 }
 
 function recleanActiveClip() {
+  if (!activeClip) return;
   const t0 = performance.now();
   pipelineResult = runCleaningPipeline(activeClip, state.cleanOptions);
   state.lastCleanDurationMs = performance.now() - t0;
@@ -441,6 +451,13 @@ function loadActiveClip(clip, presetKey = null, { preserveCleanToggles = false }
 
   syncStageVisibility();
   renderSingleFrame();
+}
+
+function ensureActiveClip() {
+  if (!activeClip) {
+    loadActiveClip(presets.slash, 'slash');
+  }
+  return activeClip;
 }
 
 function resetTrimState() {
@@ -935,6 +952,7 @@ speedBtn.addEventListener('click', () => {
 });
 
 weaponBtn?.addEventListener('click', () => {
+  ensureActiveClip();
   activeClip.hasWeapon = !activeClip.hasWeapon;
   trailHistory.length = 0;
   syncStageVisibility();
@@ -942,6 +960,7 @@ weaponBtn?.addEventListener('click', () => {
 });
 
 scrubberEl.addEventListener('input', (e) => {
+  ensureActiveClip();
   const span = activeClip.nonCyclic
     ? Math.max(1, activeClip.totalFrames - 1)
     : Math.max(1, activeClip.totalFrames);
@@ -960,7 +979,7 @@ document.getElementById('btn-export-bvh').addEventListener('click', () => {
 async function handleUploadedFile(file) {
   if (!file || isExtractingMedia) return;
   const lower = file.name.toLowerCase();
-  const inheritSword = Boolean(activeClip.hasWeapon);
+  const inheritSword = activeClip ? Boolean(activeClip.hasWeapon) : true;
 
   if (lower.endsWith('.bvh')) {
     try {
@@ -1071,6 +1090,7 @@ window.addEventListener('drop', (e) => {
 
 function handleResize() {
   if (!state.workbenchActive) return;
+  ensureWorkbenchRenderer();
   const w = Math.max(1, container.clientWidth);
   const h = Math.max(1, container.clientHeight);
   camera.aspect = w / h;
@@ -1086,7 +1106,7 @@ const _tipWorld = new THREE.Vector3();
 const _baseWorld = new THREE.Vector3();
 
 function updateSwordTrail(inHitstop) {
-  if (!activeClip.hasWeapon || state.viewMode === 'raw') {
+  if (!activeClip?.hasWeapon || state.viewMode === 'raw') {
     slashTrailMesh.visible = false;
     return;
   }
@@ -1131,6 +1151,8 @@ function updateSwordTrail(inHitstop) {
 }
 
 function updateAndRenderStage(now, dt, curSpeed) {
+  ensureWorkbenchRenderer();
+  ensureActiveClip();
   const nonCyclic = Boolean(activeClip.nonCyclic);
   const { warpedU, inHitstop } = evaluateCurrentRemap(state.normalizedTime);
   state.warpedNormalizedTime = warpedU;
@@ -1211,6 +1233,7 @@ function updateAndRenderStage(now, dt, curSpeed) {
 
 function renderSingleFrame() {
   if (!state.workbenchActive) return;
+  ensureWorkbenchRenderer();
   controls.update();
   updateAndRenderStage(performance.now(), 0.016, SPEEDS[state.speedIdx]);
 }
@@ -1222,6 +1245,8 @@ function animate(now) {
     rafId = null;
     return;
   }
+  ensureWorkbenchRenderer();
+  ensureActiveClip();
   rafId = requestAnimationFrame(animate);
   const dt = Math.min(Math.max(0, (now - prevClock) / 1000), 0.05);
   prevClock = now;
@@ -1287,6 +1312,7 @@ function serializeTelemetry(tel) {
 }
 
 function getState() {
+  ensureActiveClip();
   let bakedFrameCount = activeClip.totalFrames;
   if (pipelineResult?.cleanedFrames && state.combatCurve.mode !== 'off') {
     const shouldCountBaked =
@@ -1342,7 +1368,9 @@ function setWorkbenchActive(active) {
   const next = Boolean(active);
   state.workbenchActive = next;
   document.body.classList.toggle('workbench-inactive', !next);
-  controls.enabled = next;
+  if (controls) {
+    controls.enabled = next;
+  }
 
   if (!next) {
     if (rafId !== null) {
@@ -1352,6 +1380,8 @@ function setWorkbenchActive(active) {
     dropOverlay.hidden = true;
     pipVideo.pause?.();
   } else if (state.activeMode === 'workbench') {
+    ensureWorkbenchRenderer();
+    ensureActiveClip();
     handleResize();
     prevClock = performance.now();
     renderSingleFrame();
@@ -1407,15 +1437,15 @@ function setStageMode(requestedMode, options = {}) {
     if (!combatArena && combatContainerEl) {
       combatArena = createCombatArena(combatContainerEl, {
         embedded: true,
-        autoActive: false,
+        autoActive: true,
         exposeGlobal: true,
       });
       combatMountPromise = combatArena
         .mount()
         .then(() => {
           combatClipsReady = true;
-          if (combatArena) {
-            combatArena.setActive(state.activeMode === 'combat');
+          if (combatArena && state.activeMode !== 'combat') {
+            combatArena.setActive(false);
           }
           return combatArena;
         })
@@ -1443,11 +1473,12 @@ function setStageMode(requestedMode, options = {}) {
     setWorkbenchActive(true);
   }
 
-  return getState();
+  return options.skipStateSnapshot ? null : getState();
 }
 
 function applyCleanOptionsPatch(partial = {}) {
   if (!partial || typeof partial !== 'object') return getState();
+  ensureActiveClip();
   const prevClean = state.cleanOptions;
   const merged = { ...prevClean };
   const numericCleanKeys = new Set([
@@ -1522,6 +1553,7 @@ function applyCleanOptionsPatch(partial = {}) {
 
 function applyCombatCurvePatch(partial = {}) {
   if (!partial || typeof partial !== 'object') return getState();
+  ensureActiveClip();
   state.combatCurve = sanitizeCombatCurveOptions(
     { ...state.combatCurve, ...partial },
     state.combatCurve
@@ -1537,6 +1569,7 @@ function applyCombatCurvePatch(partial = {}) {
 
 function applyVisualsPatch(partial = {}) {
   if (!partial || typeof partial !== 'object') return getState();
+  ensureActiveClip();
   state.visuals = {
     showSkinHeatmap:
       partial.showSkinHeatmap !== undefined
@@ -1575,6 +1608,7 @@ function loadClipFromBVHText(bvhText, fileName = 'Custom.bvh', options = {}) {
 }
 
 function exportCurrentBVH(options = {}) {
+  ensureActiveClip();
   if (!pipelineResult) return '';
   const opts = options && typeof options === 'object' ? options : {};
   const combatCurve = sanitizeCombatCurveOptions(
@@ -1608,6 +1642,7 @@ function exportCurrentBVH(options = {}) {
 }
 
 function setNormalizedTime(u, pause = false) {
+  ensureActiveClip();
   if (pause) {
     state.playing = false;
     playPauseBtn.textContent = '播放';
@@ -1630,6 +1665,7 @@ function setPlaying(flag) {
 function setViewMode(nextMode) {
   if (!['clean', 'raw', 'split'].includes(nextMode)) return getState();
   if (nextMode === state.viewMode) return getState();
+  ensureActiveClip();
   const prevWasSplit = state.viewMode === 'split';
   state.viewMode = nextMode;
   trailHistory.length = 0;
@@ -1646,9 +1682,10 @@ function setViewMode(nextMode) {
 const initialModeParam = new URLSearchParams(window.location.search).get('mode');
 const bootMode = initialModeParam === 'combat' ? 'combat' : 'workbench';
 if (bootMode === 'combat') {
-  setStageMode('combat', { updateHistory: false });
-  loadActiveClip(presets.slash, 'slash');
+  state.workbenchActive = false;
+  setStageMode('combat', { updateHistory: false, skipStateSnapshot: true });
 } else {
+  ensureWorkbenchRenderer();
   loadActiveClip(presets.slash, 'slash');
   syncStageModeTabUI('workbench');
   prevClock = performance.now();

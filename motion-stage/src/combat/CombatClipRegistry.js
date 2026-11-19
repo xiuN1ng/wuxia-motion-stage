@@ -296,21 +296,32 @@ function preValidateAndScanBVH(bvhText) {
 
   const numericRows = [];
   for (let i = dataStartIdx; i < lines.length; i++) {
-    const trimmed = lines[i].trim();
-    if (!trimmed) continue;
-    const parts = trimmed.split(/\s+/);
-    if (parts.length < totalChannels) {
-      throw new Error(
-        `Invalid or truncated BVH: motion row has ${parts.length} values, expected >= ${totalChannels}`
-      );
-    }
+    const line = lines[i];
+    const len = line.length;
+    let pos = 0;
+    while (pos < len && line.charCodeAt(pos) <= 32) pos++;
+    if (pos >= len) continue;
+
     const row = new Float64Array(totalChannels);
-    for (let k = 0; k < totalChannels; k++) {
-      const val = Number(parts[k]);
-      if (!Number.isFinite(val)) {
-        throw new Error('Invalid or truncated BVH: non-finite numeric value in motion data');
+    let k = 0;
+    while (pos < len) {
+      const start = pos;
+      while (pos < len && line.charCodeAt(pos) > 32) pos++;
+      if (k < totalChannels) {
+        const val = Number(line.slice(start, pos));
+        if (!Number.isFinite(val)) {
+          throw new Error('Invalid or truncated BVH: non-finite numeric value in motion data');
+        }
+        row[k] = val;
       }
-      row[k] = val;
+      k++;
+      while (pos < len && line.charCodeAt(pos) <= 32) pos++;
+      if (k >= totalChannels) break;
+    }
+    if (k < totalChannels) {
+      throw new Error(
+        `Invalid or truncated BVH: motion row has ${k} values, expected >= ${totalChannels}`
+      );
     }
     numericRows.push(row);
     if (numericRows.length >= declaredFrames) {
@@ -613,9 +624,10 @@ export function normalizeCombatClip(id, rawFrames, fps = 60, options = {}) {
   const netX = rootTrackXZ[(N - 1) * 2];
   const netZ = rootTrackXZ[(N - 1) * 2 + 1];
 
-  const frames = new Array(N);
+  const mutateInPlace = Boolean(options.mutateInPlace);
+  const frames = mutateInPlace ? rawFrames : new Array(N);
   for (let f = 0; f < N; f++) {
-    const fr = clonePoseFrame(rawFrames[f]);
+    const fr = mutateInPlace ? rawFrames[f] : clonePoseFrame(rawFrames[f]);
     if (cyclic) {
       const frac = f / Math.max(1, N - 1);
       let sx = rootTrackXZ[f * 2] - frac * netX;
@@ -1289,6 +1301,7 @@ export class CombatClipRegistry {
                   ballisticAir: spec.ballisticAir,
                   normalizeAerialRootY: spec.normalizeAerialRootY,
                   provenance: 'bvh_library',
+                  mutateInPlace: true,
                 });
                 const stem = targetRel.split('/').pop().replace(/\.bvh$/i, '');
                 this._registerClip(clip, [stem]);
@@ -1317,6 +1330,7 @@ export class CombatClipRegistry {
             ballisticAir: spec.ballisticAir,
             normalizeAerialRootY: spec.normalizeAerialRootY,
             provenance: 'bvh_library',
+            mutateInPlace: true,
           });
           const stem = rel.split('/').pop().replace(/\.bvh$/i, '');
           this._registerClip(clip, [stem]);

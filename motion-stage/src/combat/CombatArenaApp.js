@@ -1047,9 +1047,6 @@ export function createCombatArena(containerEl = null, options = {}) {
     }
 
     setActive(autoActive);
-    if (renderer && !isActive) {
-      renderer.render(scene, combatCamera.camera);
-    }
     return api;
   }
 
