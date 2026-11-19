@@ -1,0 +1,22 @@
+# $HOME Root-Allowlist: ignore all VM home dotfiles, secrets, and caches by default
+/*
+
+# Explicitly track Wuxia MotionStage project deliverables
+!/.gitignore
+!/README.md
+!/LICENSE-CC-BY-3.0.md
+!/PROJECT.md
+!/TEST_INFRA.md
+!/env-setup.sh
+!/docs/
+!/bvh_library/
+!/motion-stage/
+!/tests/
+!/reference_videos/
+
+# Exclude build artifacts, installed packages, ephemeral logs, and non-CC-BY promotional clips
+/motion-stage/node_modules/
+/motion-stage/dist/
+/reference_videos/01*
+**/.DS_Store
+*.log
