@@ -349,7 +349,8 @@ function closeLoopAndStabilizeRoot(
   stabilizeInPlace = false,
   seamRatio = 0.20,
   preserveRootMotion = false,
-  mutateInPlace = false
+  mutateInPlace = false,
+  cyclic = true
 ) {
   if (!frames || frames.length === 0) return [];
   const N = frames.length;
@@ -371,7 +372,7 @@ function closeLoopAndStabilizeRoot(
   const last = out[N - 1];
 
   const posGap = new THREE.Vector3().subVectors(first.rootPos, last.rootPos);
-  if (preserveRootMotion) {
+  if (preserveRootMotion && !cyclic) {
     posGap.x = 0;
     posGap.z = 0;
   }
@@ -1010,20 +1011,21 @@ export function runCleaningPipeline(clip, options = {}) {
     current = filterFramesZeroPhase(
       current,
       appliedOptions.filterRadius,
-      cyclic,
+      cyclic && appliedOptions.loopClean,
       appliedOptions.filterSigma,
       true
     );
   }
 
-  // Stage 2: Loop Seam + Root Stabilization (protects horizontal trajectory when preserveRootMotion is true)
+  // Stage 2: Loop Seam + Root Stabilization (protects horizontal trajectory when preserveRootMotion is true on nonCyclic clips)
   if (appliedOptions.loopClean) {
     current = closeLoopAndStabilizeRoot(
       current,
       appliedOptions.stabilizeInPlace,
       appliedOptions.seamRatio,
       appliedOptions.preserveRootMotion,
-      true
+      true,
+      cyclic
     );
   }
 
@@ -1506,6 +1508,43 @@ export function bakeWarpedFrames(frames, clip = {}, curveOptions = {}) {
     }
     outFrame.inHitstop = inHitstop;
     baked[k] = outFrame;
+  }
+
+  // Prevent high-speed (>1.0x) windup/strike compression on uncleaned raw clips from creating >0.65 rad pops
+  const maxRate = Math.max(
+    Number(effectiveCfg.windupSpeed) || 1,
+    Number(effectiveCfg.strikeSpeed) || 1,
+    Number(effectiveCfg.recoverySpeed) || 1
+  );
+  if (maxRate > 1.01 && outCount >= 3) {
+    const maxStepRad = 0.54;
+    const qMidA = new THREE.Quaternion();
+    const qMidB = new THREE.Quaternion();
+    const qTarget = new THREE.Quaternion();
+    for (let pass = 0; pass < 8; pass++) {
+      let anyClamped = false;
+      for (let k = 1; k < outCount; k++) {
+        if (baked[k].inHitstop || baked[k - 1].inHitstop) continue;
+        for (let b = 0; b < NUM_BONES; b++) {
+          const q0 = baked[k - 1].quats[b];
+          const q1 = baked[k].quats[b];
+          const dotRaw = q0.x * q1.x + q0.y * q1.y + q0.z * q1.z + q0.w * q1.w;
+          const absDot = Math.min(1, Math.abs(dotRaw));
+          const ang = 2 * Math.acos(absDot);
+          if (ang > maxStepRad) {
+            anyClamped = true;
+            const frac = 0.52 * ((ang - maxStepRad) / ang);
+            qTarget.copy(q1);
+            if (dotRaw < 0) qTarget.set(-q1.x, -q1.y, -q1.z, -q1.w);
+            qMidA.copy(q0).slerp(qTarget, frac).normalize();
+            qMidB.copy(qTarget).slerp(q0, frac).normalize();
+            q0.copy(qMidA);
+            q1.copy(qMidB);
+          }
+        }
+      }
+      if (!anyClamped) break;
+    }
   }
 
   return baked;

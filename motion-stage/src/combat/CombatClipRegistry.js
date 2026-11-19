@@ -785,7 +785,6 @@ export class CombatClipRegistry {
     this.clips = new Map();
     this.aliasMap = new Map();
     this._initializedBaseline = false;
-    this.populateBaselineSync();
   }
 
   _registerClip(clip, aliases = []) {
@@ -804,44 +803,66 @@ export class CombatClipRegistry {
     if (this._initializedBaseline) return;
     this._initializedBaseline = true;
 
-    const runParsed = parseBVHToRawFrames(MOCAP_RUN_BVH, 60);
-    const swordParsed = parseBVHToRawFrames(MOCAP_SWORD_STRIKE_BVH, 60);
-    const kickParsed = parseBVHToRawFrames(MOCAP_KICK_BVH, 60);
-    const backflipParsed = parseBVHToRawFrames(MOCAP_BACKFLIP_BVH, 60);
-    const idleRaw = buildProceduralBreathingIdleRaw(90);
+    const needBase = (id) => {
+      const ex = this.clips.get(id);
+      return !ex || ex.provenance !== 'bvh_library';
+    };
 
-    // Front kick baseline derived from mid-section of kick mocap + forward step
-    const frontKickRaw = [];
-    for (let f = 0; f < 60; f++) {
-      const u = f / 59;
-      const fr = sampleRawPoseAt(kickParsed.frames, 0.12 + u * 0.42, false);
-      const env = Math.sin(u * Math.PI);
-      fr.rootPos.set(0, 0.92 - 0.04 * env, 0.50 * Math.sin(Math.min(1, u * 1.35) * Math.PI * 0.85));
-      addLocalEuler(fr.quats[BONE_IDX.RightUpLeg], -1.15 * env, 0, 0);
-      addLocalEuler(fr.quats[BONE_IDX.RightLeg], 0.85 * Math.sin(Math.min(1, u * 2) * Math.PI) * (1 - env * 0.7), 0, 0);
-      frontKickRaw.push(fr);
+    if (needBase('01_idle')) {
+      const idleRaw = buildProceduralBreathingIdleRaw(90);
+      this._registerClip(
+        normalizeCombatClip('01_idle', idleRaw, 60, { cyclic: true, provenance: 'derived_kinematic' }),
+        ['01_wuxia_idle_待机呼吸_cleaned']
+      );
+    }
+    if (needBase('02_run')) {
+      const runParsed = parseBVHToRawFrames(MOCAP_RUN_BVH, 60);
+      this._registerClip(
+        normalizeCombatClip('02_run', runParsed.frames, 60, { cyclic: true, provenance: 'bvh_bundle' }),
+        ['02_wuxia_run_疾跑轻功_cleaned']
+      );
+    }
+    if (needBase('03_sword_combo')) {
+      const swordParsed = parseBVHToRawFrames(MOCAP_SWORD_STRIKE_BVH, 60);
+      this._registerClip(
+        normalizeCombatClip('03_sword_combo', swordParsed.frames, 60, { cyclic: false, provenance: 'bvh_bundle' }),
+        ['03_wuxia_sword_combo_剑术连斩去穿模_cleaned']
+      );
+    }
+    if (needBase('04_tornado_kick') || needBase('05_front_kick')) {
+      const kickParsed = parseBVHToRawFrames(MOCAP_KICK_BVH, 60);
+      if (needBase('04_tornado_kick')) {
+        this._registerClip(
+          normalizeCombatClip('04_tornado_kick', kickParsed.frames, 60, { cyclic: false, provenance: 'bvh_bundle' }),
+          ['04_wuxia_tornado_kick_旋风回旋踢_cleaned']
+        );
+      }
+      if (needBase('05_front_kick')) {
+        const frontKickRaw = [];
+        for (let f = 0; f < 60; f++) {
+          const u = f / 59;
+          const fr = sampleRawPoseAt(kickParsed.frames, 0.12 + u * 0.42, false);
+          const env = Math.sin(u * Math.PI);
+          fr.rootPos.set(0, 0.92 - 0.04 * env, 0.50 * Math.sin(Math.min(1, u * 1.35) * Math.PI * 0.85));
+          addLocalEuler(fr.quats[BONE_IDX.RightUpLeg], -1.15 * env, 0, 0);
+          addLocalEuler(fr.quats[BONE_IDX.RightLeg], 0.85 * Math.sin(Math.min(1, u * 2) * Math.PI) * (1 - env * 0.7), 0, 0);
+          frontKickRaw.push(fr);
+        }
+        this._registerClip(
+          normalizeCombatClip('05_front_kick', frontKickRaw, 60, { cyclic: false, provenance: 'bvh_bundle' }),
+          ['05_wuxia_front_kick_正蹬破防踢_cleaned']
+        );
+      }
+    }
+    if (needBase('06_backflip')) {
+      const backflipParsed = parseBVHToRawFrames(MOCAP_BACKFLIP_BVH, 60);
+      this._registerClip(
+        normalizeCombatClip('06_backflip', backflipParsed.frames, 60, { cyclic: false, provenance: 'bvh_bundle' }),
+        ['06_wuxia_backflip_原地后空翻_cleaned']
+      );
     }
 
-    this._registerClip(normalizeCombatClip('01_idle', idleRaw, 60, { cyclic: true, provenance: 'derived_kinematic' }), [
-      '01_wuxia_idle_待机呼吸_cleaned',
-    ]);
-    this._registerClip(normalizeCombatClip('02_run', runParsed.frames, 60, { cyclic: true, provenance: 'bvh_bundle' }), [
-      '02_wuxia_run_疾跑轻功_cleaned',
-    ]);
-    this._registerClip(normalizeCombatClip('03_sword_combo', swordParsed.frames, 60, { cyclic: false, provenance: 'bvh_bundle' }), [
-      '03_wuxia_sword_combo_剑术连斩去穿模_cleaned',
-    ]);
-    this._registerClip(normalizeCombatClip('04_tornado_kick', kickParsed.frames, 60, { cyclic: false, provenance: 'bvh_bundle' }), [
-      '04_wuxia_tornado_kick_旋风回旋踢_cleaned',
-    ]);
-    this._registerClip(normalizeCombatClip('05_front_kick', frontKickRaw, 60, { cyclic: false, provenance: 'bvh_bundle' }), [
-      '05_wuxia_front_kick_正蹬破防踢_cleaned',
-    ]);
-    this._registerClip(normalizeCombatClip('06_backflip', backflipParsed.frames, 60, { cyclic: false, provenance: 'bvh_bundle' }), [
-      '06_wuxia_backflip_原地后空翻_cleaned',
-    ]);
-
-    this._rebuildDerivedClips(false);
+    this._rebuildDerivedClips(true);
   }
 
   /**
@@ -1282,65 +1303,75 @@ export class CombatClipRegistry {
 
     // Tier 2 & Tier 3: Browser HTTP fetch (or explicit `fetchImpl` injection) with strict `Accept: text/plain` & `isValidBVHText` guard
     if (hasExplicitFetch || (!isNodeRuntime && Boolean(customFetch))) {
-      // Optional MANIFEST.json discovery
-      const manifestPaths = new Map();
-      try {
-        const mRes = await customFetch(`${baseUrl}/MANIFEST.json`, {
-          headers: { Accept: 'application/json' },
-        });
-        if (mRes.ok) {
-          const mTxt = (await mRes.text()).trim();
-          if (mTxt.startsWith('{') || mTxt.startsWith('[')) {
-            const parsedManifest = JSON.parse(mTxt);
-            const entries = Array.isArray(parsedManifest)
-              ? parsedManifest
-              : Array.isArray(parsedManifest.clips)
-                ? parsedManifest.clips
-                : Array.isArray(parsedManifest.assets)
-                  ? parsedManifest.assets
-                  : [];
-            for (const entry of entries) {
-              const p = String(entry.path || entry.relPath || '').replace(/^\/?bvh_library\//, '');
-              if (p.endsWith('.bvh')) {
-                const fileBase = p.split('/').pop();
-                for (const spec of CANONICAL_CLIP_SPECS) {
-                  if (entry.id === spec.id || fileBase.startsWith(spec.prefix)) {
-                    manifestPaths.set(spec.id, p);
+      const fetchOneSpec = async (spec, rel) => {
+        if (this.clips.get(spec.id)?.provenance === 'bvh_library') return true;
+        try {
+          const url = `${baseUrl}/${rel.split('/').map(encodeURIComponent).join('/')}`;
+          const res = await customFetch(url, { headers: { Accept: 'text/plain' } });
+          if (!res.ok) return false;
+          const txt = await res.text();
+          if (!isValidBVHText(txt)) return false;
+          const parsed = parseBVHToRawFrames(txt, 60);
+          const clip = normalizeCombatClip(spec.id, parsed.frames, parsed.fps, {
+            cyclic: spec.cyclic,
+            ballisticAir: spec.ballisticAir,
+            normalizeAerialRootY: spec.normalizeAerialRootY,
+            provenance: 'bvh_library',
+          });
+          const stem = rel.split('/').pop().replace(/\.bvh$/i, '');
+          this._registerClip(clip, [stem]);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
+      // Fast path: probe all 26 canonical `/bvh_library/...` files immediately in parallel
+      await Promise.all(CANONICAL_CLIP_SPECS.map((spec) => fetchOneSpec(spec, spec.relPath)));
+
+      // Fallback: only consult MANIFEST.json if any canonical spec used an alternate filename
+      const missingSpecs = CANONICAL_CLIP_SPECS.filter(
+        (spec) => this.clips.get(spec.id)?.provenance !== 'bvh_library'
+      );
+      if (missingSpecs.length > 0) {
+        try {
+          const mRes = await customFetch(`${baseUrl}/MANIFEST.json`, {
+            headers: { Accept: 'application/json' },
+          });
+          if (mRes.ok) {
+            const mTxt = (await mRes.text()).trim();
+            if (mTxt.startsWith('{') || mTxt.startsWith('[')) {
+              const parsedManifest = JSON.parse(mTxt);
+              const entries = Array.isArray(parsedManifest)
+                ? parsedManifest
+                : Array.isArray(parsedManifest.clips)
+                  ? parsedManifest.clips
+                  : Array.isArray(parsedManifest.assets)
+                    ? parsedManifest.assets
+                    : [];
+              const manifestPaths = new Map();
+              for (const entry of entries) {
+                const p = String(entry.path || entry.relPath || '').replace(/^\/?bvh_library\//, '');
+                if (p.endsWith('.bvh')) {
+                  const fileBase = p.split('/').pop();
+                  for (const spec of missingSpecs) {
+                    if (entry.id === spec.id || fileBase.startsWith(spec.prefix)) {
+                      manifestPaths.set(spec.id, p);
+                    }
                   }
                 }
               }
+              await Promise.all(
+                missingSpecs
+                  .filter((spec) => manifestPaths.has(spec.id))
+                  .map((spec) => fetchOneSpec(spec, manifestPaths.get(spec.id)))
+              );
             }
           }
+        } catch {
+          // Ignore offline/missing manifest
         }
-      } catch {
-        // Ignore offline/missing manifest
       }
-
-      // Probe canonical `/bvh_library/...` files in parallel
-      await Promise.all(
-        CANONICAL_CLIP_SPECS.map(async (spec) => {
-          if (this.clips.get(spec.id)?.provenance === 'bvh_library') return;
-          const rel = manifestPaths.get(spec.id) || spec.relPath;
-          try {
-            const url = `${baseUrl}/${rel.split('/').map(encodeURIComponent).join('/')}`;
-            const res = await customFetch(url, { headers: { Accept: 'text/plain' } });
-            if (!res.ok) return;
-            const txt = await res.text();
-            if (!isValidBVHText(txt)) return;
-            const parsed = parseBVHToRawFrames(txt, 60);
-            const clip = normalizeCombatClip(spec.id, parsed.frames, parsed.fps, {
-              cyclic: spec.cyclic,
-              ballisticAir: spec.ballisticAir,
-              normalizeAerialRootY: spec.normalizeAerialRootY,
-              provenance: 'bvh_library',
-            });
-            const stem = rel.split('/').pop().replace(/\.bvh$/i, '');
-            this._registerClip(clip, [stem]);
-          } catch {
-            // Reject network/parse failure cleanly
-          }
-        })
-      );
 
       // Tier 3: Foundational `/mocap/*.bvh` fallback for `01_idle` and `05_front_kick` if `/bvh_library` isn't mounted yet
       const mocapFallbacks = [
@@ -1368,12 +1399,17 @@ export class CombatClipRegistry {
       );
     }
 
-    // Tier 4: Refresh derived clips (`combo_1..3` + any still-pending M2 clip) from upgraded base clips
-    this._rebuildDerivedClips(true);
+    // Tier 4: Populate fallback mocap/derived clips only if any of the 26 canonical clips was unavailable
+    if (this.clips.size < CANONICAL_CLIP_SPECS.length) {
+      this.populateBaselineSync();
+    } else {
+      this._rebuildDerivedClips(true);
+    }
     return this;
   }
 
   getClip(idOrAlias) {
+    if (this.clips.size === 0) this.populateBaselineSync();
     if (!idOrAlias) return this.clips.get('taibai_01b') || this.clips.get('01_idle');
     if (this.clips.has(idOrAlias)) return this.clips.get(idOrAlias);
     const mapped = this.aliasMap.get(String(idOrAlias).toLowerCase());
@@ -1382,11 +1418,13 @@ export class CombatClipRegistry {
   }
 
   hasClip(idOrAlias) {
+    if (this.clips.size === 0) this.populateBaselineSync();
     if (!idOrAlias) return false;
     return this.clips.has(idOrAlias) || this.aliasMap.has(String(idOrAlias).toLowerCase());
   }
 
   getLoadedClipIds() {
+    if (this.clips.size === 0) this.populateBaselineSync();
     return Array.from(this.clips.keys()).sort();
   }
 

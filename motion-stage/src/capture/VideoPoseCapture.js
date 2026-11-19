@@ -463,15 +463,28 @@ export function landmarksToHumanoidFrame(worldLm, normLm) {
     const torsoCenter = new THREE.Vector3().lerpVectors(hipCenter, shCenter, 0.65);
     const outFromBody = new THREE.Vector3().subVectors(P[16], torsoCenter);
     if (outFromBody.lengthSq() > 1e-8 && outFromBody.length() < 0.58) {
+      const outUnit = outFromBody.clone().normalize();
+      const handInward = handDirR.dot(outUnit);
+      if (handInward < -0.10) {
+        handDirR.addScaledVector(outUnit, -handInward + 0.15);
+        if (handDirR.lengthSq() < 1e-8) handDirR.copy(outUnit);
+        else handDirR.normalize();
+        radialR.addScaledVector(handDirR, -radialR.dot(handDirR));
+        if (radialR.lengthSq() < 1e-8) {
+          radialR.copy(makePerpUnit(handDirR, outUnit));
+        } else {
+          radialR.normalize();
+        }
+      }
       const bladeDir = new THREE.Vector3()
         .copy(handDirR)
         .multiplyScalar(0.619)
         .addScaledVector(radialR, 0.785);
-      const safeOut = outFromBody.clone().normalize().add(new THREE.Vector3(0, 0.45, 0.25));
+      const safeOut = outUnit.clone().add(new THREE.Vector3(0, 0.45, 0.25));
       safeOut.addScaledVector(handDirR, -safeOut.dot(handDirR));
-      if (bladeDir.dot(outFromBody) < -0.02 && safeOut.lengthSq() > 1e-4) {
+      if (bladeDir.dot(outUnit) < 0.05 && safeOut.lengthSq() > 1e-4) {
         safeOut.normalize();
-        radialR.lerp(safeOut, 0.75).addScaledVector(handDirR, -radialR.dot(handDirR));
+        radialR.lerp(safeOut, 0.85).addScaledVector(handDirR, -radialR.dot(handDirR));
         if (radialR.lengthSq() < 1e-8) {
           radialR.copy(makePerpUnit(handDirR, new THREE.Vector3(0, 1, 0)));
         } else {

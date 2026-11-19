@@ -27,6 +27,12 @@ export function createStaticRangeMiddleware(mounts) {
     }
 
     const rawPathname = req.url.split('?')[0].split('#')[0];
+    if (rawPathname.startsWith('/.') || rawPathname.includes('..')) {
+      res.statusCode = 403;
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.end('Forbidden');
+      return;
+    }
     const matched = mounts.find(
       ([prefix]) => rawPathname === prefix.slice(0, -1) || rawPathname.startsWith(prefix)
     );

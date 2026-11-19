@@ -88,15 +88,30 @@ const state = {
   },
 };
 
+const _presetCache = {};
+const _presetBuilders = {
+  slash: buildSlashClip,
+  kick: buildKickClip,
+  backflip: buildBackflipClip,
+  run: buildRunClip,
+};
 const presets = {
-  slash: buildSlashClip(),
-  kick: buildKickClip(),
-  backflip: buildBackflipClip(),
-  run: buildRunClip(),
+  get slash() {
+    return (_presetCache.slash ||= _presetBuilders.slash());
+  },
+  get kick() {
+    return (_presetCache.kick ||= _presetBuilders.kick());
+  },
+  get backflip() {
+    return (_presetCache.backflip ||= _presetBuilders.backflip());
+  },
+  get run() {
+    return (_presetCache.run ||= _presetBuilders.run());
+  },
 };
 
 let assetCatalog = STATIC_ASSET_CATALOG.map((item) => ({ ...item }));
-let activeClip = presets.slash;
+let activeClip = null;
 let pipelineResult = null;
 let activeMediaUrl = null;
 let activeMediaOwned = false;
@@ -1630,10 +1645,11 @@ function setViewMode(nextMode) {
 // --- Boot Default Clip & Start Render Loop (or Combat Arena via ?mode=combat) ---
 const initialModeParam = new URLSearchParams(window.location.search).get('mode');
 const bootMode = initialModeParam === 'combat' ? 'combat' : 'workbench';
-loadActiveClip(presets.slash, 'slash');
 if (bootMode === 'combat') {
   setStageMode('combat', { updateHistory: false });
+  loadActiveClip(presets.slash, 'slash');
 } else {
+  loadActiveClip(presets.slash, 'slash');
   syncStageModeTabUI('workbench');
   prevClock = performance.now();
   rafId = requestAnimationFrame(animate);

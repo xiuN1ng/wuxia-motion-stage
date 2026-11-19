@@ -824,6 +824,11 @@ export class CombatStateMachine {
       return { executed: true, buffered: false, state: this.currentState };
     }
 
+    // Do not queue redundant 3rd/4th mid-air jumps once double-jump charge is spent
+    if ((norm === 'Jump' || norm === 'Air_Jump_Double') && this.doubleJumpUsed) {
+      return { executed: false, buffered: false, state: this.currentState };
+    }
+
     // Otherwise store in 180ms TTL input buffer
     this._pruneExpiredBuffer();
     const prio = BUFFER_ACTION_PRIORITY[norm] ?? 40;
