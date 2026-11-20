@@ -796,6 +796,65 @@ body.mode-combat #top-floating-bar {
   color: var(--text-primary);
 }
 
+.hud-origin-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: var(--glass-inset);
+  border: 1px solid hsla(214, 15%, 78%, 0.08);
+}
+
+.top-origin-pill,
+.hud-origin-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+  border: 1px solid var(--border-subtle);
+}
+
+.top-origin-pill {
+  height: 24px;
+  font-size: 11px;
+  padding: 0 8px;
+}
+
+.top-origin-pill.is-origin-ai,
+.hud-origin-pill.is-origin-ai {
+  background: hsla(34, 84%, 54%, 0.20);
+  color: hsl(36, 92%, 72%);
+  border-color: hsla(34, 84%, 58%, 0.45);
+}
+
+.top-origin-pill.is-origin-mocap,
+.hud-origin-pill.is-origin-mocap {
+  background: hsla(166, 56%, 42%, 0.20);
+  color: hsl(166, 68%, 74%);
+  border-color: hsla(166, 56%, 50%, 0.42);
+}
+
+.top-origin-pill.is-origin-custom,
+.hud-origin-pill.is-origin-custom {
+  background: hsla(215, 22%, 34%, 0.35);
+  color: var(--text-primary);
+  border-color: hsla(214, 20%, 76%, 0.28);
+}
+
+.hud-origin-detail {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .hud-badges {
   display: flex;
   flex-wrap: wrap;

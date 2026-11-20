@@ -1,8 +1,8 @@
 export const ASSET_CATEGORY_ORDER = [
-  { key: 'presets', label: '内置退化对比预设 (Raw vs Clean)' },
-  { key: 'videos', label: '太白与武术实拍视频 (AI 实时提取)' },
-  { key: 'b_cleaned', label: 'B_cleaned_ready 标准成品库 (.bvh)' },
-  { key: 'c_taibai', label: 'C_taibai_extracted 太白归档 (.bvh)' },
+  { key: 'presets', label: '内置退化对比预设 · 开源动捕库 (MakeHuman / CMU)' },
+  { key: 'videos', label: '武术与太白实拍视频 · AI 实时姿态提取 (MediaPipe)' },
+  { key: 'b_cleaned', label: 'B_cleaned_ready · 开源光学动捕库 (22套 · CMU / MakeHuman)' },
+  { key: 'c_taibai', label: 'C_taibai_extracted · AI 视频提取成品 (4套 · 天刀太白)' },
 ];
 
 export const STATIC_ASSET_CATALOG = [
@@ -488,6 +488,7 @@ export function mergeManifestWithCatalog(manifestData, baseCatalog = STATIC_ASSE
       if (raw.durationSec !== undefined) target.durationSec = raw.durationSec;
       if (raw.archetype) target.archetype = raw.archetype;
       if (raw.sourceProvenance) target.sourceProvenance = raw.sourceProvenance;
+      if (raw.sourceProvenanceDetail) target.sourceProvenanceDetail = raw.sourceProvenanceDetail;
       if (raw.driveFileId) target.driveFileId = raw.driveFileId;
       target.manifestVerified = true;
     } else if (normPath) {
@@ -508,6 +509,7 @@ export function mergeManifestWithCatalog(manifestData, baseCatalog = STATIC_ASSE
         durationSec: raw.durationSec,
         archetype: raw.archetype,
         sourceProvenance: raw.sourceProvenance,
+        sourceProvenanceDetail: raw.sourceProvenanceDetail,
         driveFileId: raw.driveFileId,
         manifestVerified: true,
       };
@@ -519,6 +521,261 @@ export function mergeManifestWithCatalog(manifestData, baseCatalog = STATIC_ASSE
   }
 
   return merged;
+}
+
+const KNOWN_ORIGIN_LOOKUP = [
+  {
+    match: /(taibai_01b|video:01b|01b_)/i,
+    originGroup: 'ai_extracted',
+    tagShort: 'AI提取',
+    badgeLabel: 'AI 视频提取 · MediaPipe',
+    upstreamText: '天刀太白崖顶横剑实拍 (1.0s)',
+  },
+  {
+    match: /(taibai_02|taibai_demo|taibai_wuhen|video:02|02_太白无痕)/i,
+    originGroup: 'ai_extracted',
+    tagShort: 'AI提取',
+    badgeLabel: 'AI 视频提取 · MediaPipe',
+    upstreamText: '世界冠军李昕豫剑术实拍 (CC BY 3.0)',
+  },
+  {
+    match: /(taibai_03|video:03|03_太白雨落)/i,
+    originGroup: 'ai_extracted',
+    tagShort: 'AI提取',
+    badgeLabel: 'AI 视频提取 · MediaPipe',
+    upstreamText: '北京武术队2012巡演实拍 (CC BY 3.0)',
+  },
+  {
+    match: /(taibai_04|video:04|04_太白飞燕)/i,
+    originGroup: 'ai_extracted',
+    tagShort: 'AI提取',
+    badgeLabel: 'AI 视频提取 · MediaPipe',
+    upstreamText: '全国冠军王曦旋风跌叉实拍 (CC BY 3.0)',
+  },
+  {
+    match: /(video:05|taibai_video_05|05_北京武术队)/i,
+    originGroup: 'ai_extracted',
+    tagShort: 'AI提取',
+    badgeLabel: 'AI 视频提取 · MediaPipe',
+    upstreamText: '北京武术队2012巡演75.9s母带 (CC BY 3.0)',
+  },
+  {
+    match: /(^|:)(01_idle|wuxia_01_idle|01_wuxia_idle)/i,
+    originGroup: 'open_mocap',
+    tagShort: '开源·MH',
+    badgeLabel: '开源动捕库 · MakeHuman',
+    upstreamText: 'MakeHuman avatar_stand_1.bvh (CC0)',
+  },
+  {
+    match: /(^|:)(run|02_run|wuxia_02_run|02_wuxia_run)/i,
+    originGroup: 'open_mocap',
+    tagShort: '开源·MH',
+    badgeLabel: '开源动捕库 · MakeHuman',
+    upstreamText: 'MakeHuman avatar_run.bvh (CC0)',
+  },
+  {
+    match: /(^|:)(slash|combo_[123]|03_sword_combo|wuxia_03_sword_combo|03_wuxia_sword_combo)/i,
+    originGroup: 'open_mocap',
+    tagShort: '开源·MH',
+    badgeLabel: '开源动捕库 · MakeHuman',
+    upstreamText: 'MakeHuman avatar_sword_strike_R.bvh (CC0)',
+  },
+  {
+    match: /(^|:)(kick|04_tornado_kick|wuxia_04_tornado_kick|04_wuxia_tornado_kick)/i,
+    originGroup: 'open_mocap',
+    tagShort: '开源·CMU',
+    badgeLabel: '开源动捕库 · CMU Mocap',
+    upstreamText: 'CMU Mocap #87_01 旋风踢 (Public Domain)',
+  },
+  {
+    match: /(^|:)(05_front_kick|wuxia_05_front_kick|05_wuxia_front_kick)/i,
+    originGroup: 'open_mocap',
+    tagShort: '开源·MH',
+    badgeLabel: '开源动捕库 · MakeHuman',
+    upstreamText: 'MakeHuman avatar_kick_roundhouse_R.bvh (CC0)',
+  },
+  {
+    match: /(^|:)(backflip|06_backflip|wuxia_06_backflip|06_wuxia_backflip)/i,
+    originGroup: 'open_mocap',
+    tagShort: '开源·MH',
+    badgeLabel: '开源动捕库 · MakeHuman',
+    upstreamText: 'MakeHuman avatar_backflip.bvh (CC0)',
+  },
+  {
+    match: /07_.*strafe_F\b/i,
+    originGroup: 'open_mocap',
+    tagShort: '开源·CMU',
+    badgeLabel: '开源动捕库 · CMU Mocap',
+    upstreamText: 'CMU Mocap #143_32 前垫步重定向 (Public Domain)',
+  },
+  {
+    match: /07_.*strafe_B\b/i,
+    originGroup: 'open_mocap',
+    tagShort: '开源·CMU',
+    badgeLabel: '开源动捕库 · CMU Mocap',
+    upstreamText: 'CMU Mocap #143_39 后撤步重定向 (Public Domain)',
+  },
+  {
+    match: /07_.*strafe_[LR]\b/i,
+    originGroup: 'open_mocap',
+    tagShort: '开源·CMU',
+    badgeLabel: '开源动捕库 · CMU Mocap',
+    upstreamText: 'CMU Mocap #141_33 侧垫步重定向 (Public Domain)',
+  },
+  {
+    match: /07_.*strafe_F[LR]\b/i,
+    originGroup: 'open_mocap',
+    tagShort: '开源·CMU',
+    badgeLabel: '开源动捕库 · CMU Mocap',
+    upstreamText: 'CMU Mocap #141_32 斜前垫步重定向 (Public Domain)',
+  },
+  {
+    match: /07_.*strafe_B[LR]\b/i,
+    originGroup: 'open_mocap',
+    tagShort: '开源·CMU',
+    badgeLabel: '开源动捕库 · CMU Mocap',
+    upstreamText: 'CMU Mocap #143_40 斜后垫步重定向 (Public Domain)',
+  },
+  {
+    match: /08_.*dash_canglong/i,
+    originGroup: 'open_mocap',
+    tagShort: '开源·CMU',
+    badgeLabel: '开源动捕库 · CMU Mocap',
+    upstreamText: 'CMU Mocap #49_04 剑刺突进 (Public Domain)',
+  },
+  {
+    match: /09_.*dodge_roll/i,
+    originGroup: 'open_mocap',
+    tagShort: '开源·CMU',
+    badgeLabel: '开源动捕库 · CMU Mocap',
+    upstreamText: 'CMU Mocap #90_34 前滚翻闪避 (Public Domain)',
+  },
+  {
+    match: /(^|:)(jump|10_.*double_jump)/i,
+    originGroup: 'open_mocap',
+    tagShort: '开源·CMU',
+    badgeLabel: '开源动捕库 · CMU Mocap',
+    upstreamText: 'CMU Mocap #83_62 腾空轻功跳 (Public Domain)',
+  },
+  {
+    match: /11_.*hit_light_L/i,
+    originGroup: 'open_mocap',
+    tagShort: '开源·CMU',
+    badgeLabel: '开源动捕库 · CMU Mocap',
+    upstreamText: 'CMU Mocap #144_07 左受击硬直 (Public Domain)',
+  },
+  {
+    match: /12_.*hit_light_R/i,
+    originGroup: 'open_mocap',
+    tagShort: '开源·CMU',
+    badgeLabel: '开源动捕库 · CMU Mocap',
+    upstreamText: 'CMU Mocap #144_26 右受击硬直 (Public Domain)',
+  },
+  {
+    match: /15_.*knockdown_kipup/i,
+    originGroup: 'open_mocap',
+    tagShort: '开源·CMU',
+    badgeLabel: '开源动捕库 · CMU Mocap',
+    upstreamText: 'CMU Mocap #90_18 + #140_08 倒地接打挺',
+  },
+  {
+    match: /13_.*knockdown/i,
+    originGroup: 'open_mocap',
+    tagShort: '开源·CMU',
+    badgeLabel: '开源动捕库 · CMU Mocap',
+    upstreamText: 'CMU Mocap #90_18 击飞倒地 (Public Domain)',
+  },
+  {
+    match: /14_.*kipup/i,
+    originGroup: 'open_mocap',
+    tagShort: '开源·CMU',
+    badgeLabel: '开源动捕库 · CMU Mocap',
+    upstreamText: 'CMU Mocap #140_08 鲤鱼打挺 (Public Domain)',
+  },
+];
+
+/**
+ * Resolves unified human-readable provenance metadata distinguishing AI-extracted clips
+ * (`C_taibai_extracted`, reference/uploaded videos & images) from open-source optical mocap
+ * libraries (`MakeHuman OpenMocap` & `CMU Graphics Lab Mocap`).
+ */
+export function resolveMotionProvenance(input = {}) {
+  const {
+    clipKey = '',
+    clipId = '',
+    clipName = '',
+    path = '',
+    category = '',
+    kind = '',
+    originKind = '',
+    sourceProvenance = '',
+    sourceProvenanceDetail = null,
+  } = typeof input === 'string' ? { clipId: input } : input || {};
+
+  if (originKind === 'video_capture' || originKind === 'image_capture') {
+    return {
+      originGroup: 'ai_extracted',
+      tagShort: 'AI提取',
+      badgeLabel: originKind === 'image_capture' ? 'AI 图像姿态提取 · MediaPipe' : 'AI 视频实时提取 · MediaPipe',
+      upstreamText: clipName || '本地上传实拍媒体',
+    };
+  }
+  if (originKind === 'bvh_upload') {
+    return {
+      originGroup: 'custom_bvh',
+      tagShort: '本地BVH',
+      badgeLabel: '本地导入 · 标准 BVH',
+      upstreamText: clipName || '用户上传 .bvh 动作文件',
+    };
+  }
+
+  const probe = [clipKey, clipId, path, clipName].filter(Boolean).join(' | ');
+  for (const rule of KNOWN_ORIGIN_LOOKUP) {
+    if (rule.match.test(probe)) {
+      return { ...rule };
+    }
+  }
+
+  const provStr = `${sourceProvenanceDetail?.type || ''} ${sourceProvenance || ''}`.toLowerCase();
+  if (
+    kind === 'video' ||
+    category === 'videos' ||
+    category === 'c_taibai' ||
+    path.includes('/C_taibai_extracted/') ||
+    path.includes('/reference_videos/') ||
+    provStr.includes('mediapipe') ||
+    provStr.includes('video')
+  ) {
+    return {
+      originGroup: 'ai_extracted',
+      tagShort: 'AI提取',
+      badgeLabel: 'AI 视频提取 · MediaPipe',
+      upstreamText: sourceProvenanceDetail?.upstreamRef || clipName || '实拍视频姿态提取',
+    };
+  }
+  if (provStr.includes('makehuman')) {
+    return {
+      originGroup: 'open_mocap',
+      tagShort: '开源·MH',
+      badgeLabel: '开源动捕库 · MakeHuman',
+      upstreamText: sourceProvenanceDetail?.upstreamRef || 'MakeHuman OpenMocap (CC0)',
+    };
+  }
+  if (provStr.includes('cmu') || category === 'b_cleaned' || path.includes('/B_cleaned_ready/')) {
+    return {
+      originGroup: 'open_mocap',
+      tagShort: '开源·CMU',
+      badgeLabel: '开源动捕库 · CMU Mocap',
+      upstreamText: sourceProvenanceDetail?.upstreamRef || 'CMU Graphics Lab 光学动捕库',
+    };
+  }
+
+  return {
+    originGroup: 'custom_bvh',
+    tagShort: '外部动作',
+    badgeLabel: '外部骨骼动作 (.BVH)',
+    upstreamText: clipName || clipId || '自定义动作资产',
+  };
 }
 
 export async function fetchAssetCatalog(fetchImpl = globalThis.fetch) {
@@ -560,7 +817,7 @@ export function populateAssetSelectElement(selectEl, catalog, selectedId = '') {
 
   const placeholder = document.createElement('option');
   placeholder.value = '';
-  placeholder.textContent = '内置资产库 (BVH / 太白实拍)...';
+  placeholder.textContent = '动作库 (开源库 22套 / AI提取 4套)...';
   selectEl.appendChild(placeholder);
 
   for (const groupDef of ASSET_CATEGORY_ORDER) {
@@ -573,9 +830,20 @@ export function populateAssetSelectElement(selectEl, catalog, selectedId = '') {
     for (const item of groupItems) {
       const opt = document.createElement('option');
       opt.value = item.id;
+      const prov = resolveMotionProvenance({
+        clipKey: item.presetKey || item.id,
+        clipId: item.id,
+        clipName: item.label,
+        path: item.path || '',
+        category: item.category,
+        kind: item.kind,
+        sourceProvenance: item.sourceProvenance,
+        sourceProvenanceDetail: item.sourceProvenanceDetail,
+      });
+      const prefix = prov?.tagShort ? `[${prov.tagShort}] ` : '';
       const suffix =
         item.frames && item.fps && !/\d+f/.test(item.label) ? ` · ${item.frames}f` : '';
-      opt.textContent = `${item.label}${suffix}`;
+      opt.textContent = `${prefix}${item.label}${suffix}`;
       optgroup.appendChild(opt);
     }
     selectEl.appendChild(optgroup);

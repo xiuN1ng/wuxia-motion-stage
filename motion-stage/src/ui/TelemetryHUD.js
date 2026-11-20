@@ -32,6 +32,11 @@ export function createTelemetryHUD(containerEl, { onScrubNormalizedTime } = {}) 
       <button type="button" id="btn-collapse-telemetry" class="wb-mini-btn" title="折叠或展开遥测曲线图">收起</button>
     </div>
 
+    <div class="hud-origin-row" id="hud-origin-row">
+      <span id="badge-origin-type" class="hud-origin-pill is-origin-mocap">开源 · MakeHuman</span>
+      <span id="lbl-origin-detail" class="hud-origin-detail" title="">avatar_sword_strike_R.bvh (CC0)</span>
+    </div>
+
     <div class="hud-badges">
       <span id="badge-slip-stats" class="hud-stat-badge">滑步 RMS 0.0 → 0.0 cm/s</span>
       <span id="badge-jitter-stats" class="hud-stat-badge">抖动 RMS 0.00 → 0.00</span>
@@ -49,6 +54,8 @@ export function createTelemetryHUD(containerEl, { onScrubNormalizedTime } = {}) 
 
   const canvas = containerEl.querySelector('#telemetry-canvas');
   const canvasWrap = containerEl.querySelector('#hud-canvas-wrap');
+  const originBadge = containerEl.querySelector('#badge-origin-type');
+  const originDetail = containerEl.querySelector('#lbl-origin-detail');
   const slipBadge = containerEl.querySelector('#badge-slip-stats');
   const jitterBadge = containerEl.querySelector('#badge-jitter-stats');
   const collapseBtn = containerEl.querySelector('#btn-collapse-telemetry');
@@ -69,6 +76,16 @@ export function createTelemetryHUD(containerEl, { onScrubNormalizedTime } = {}) 
   }
 
   function updateBadges() {
+    const prov = currentData?.provenance;
+    if (prov && originBadge && originDetail) {
+      originBadge.textContent = prov.badgeLabel || prov.tagShort || '开源动捕库';
+      originBadge.classList.toggle('is-origin-ai', prov.originGroup === 'ai_extracted');
+      originBadge.classList.toggle('is-origin-mocap', prov.originGroup === 'open_mocap');
+      originBadge.classList.toggle('is-origin-custom', prov.originGroup === 'custom_bvh');
+      originDetail.textContent = prov.upstreamText || '';
+      originDetail.title = `${prov.badgeLabel || ''} — ${prov.upstreamText || ''}`;
+    }
+
     if (!currentData?.rawTelemetry || !currentData?.cleanTelemetry) return;
     const rawT = currentData.rawTelemetry;
     const clnT = currentData.cleanTelemetry;

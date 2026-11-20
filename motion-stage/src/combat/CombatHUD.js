@@ -2,6 +2,7 @@
  * Scoped Wuxia Combat Arena HUD (`CombatHUD.js`).
  * Uses dirty-checked DOM mutations (`tabular-nums`, `scaleX` transforms) for zero-jank 60fps updates.
  */
+import { resolveMotionProvenance } from '../ui/AssetLibraryCatalog.js';
 
 export class CombatHUD {
   constructor(rootEl, handlers = {}, options = {}) {
@@ -63,9 +64,17 @@ export class CombatHUD {
         </div>
         <div class="combat-layer-grid">
           <span class="combat-layer-key">下盘驱动</span>
-          <span id="lbl-base-clip" class="combat-layer-val">taibai_01b</span>
+          <div class="combat-layer-cell">
+            <span id="lbl-base-clip" class="combat-layer-val">taibai_01b</span>
+            <span id="pill-base-origin" class="combat-origin-pill is-ai">AI提取</span>
+          </div>
           <span class="combat-layer-key">上盘覆写</span>
-          <span id="lbl-upper-clip" class="combat-layer-val">— (全身轨道)</span>
+          <div class="combat-layer-cell">
+            <span id="lbl-upper-clip" class="combat-layer-val">— (全身轨道)</span>
+            <span id="pill-upper-origin" class="combat-origin-pill" hidden></span>
+          </div>
+          <span class="combat-layer-key">动作溯源</span>
+          <span id="lbl-combat-origin-detail" class="combat-layer-val">天刀太白崖顶横剑实拍 (1.0s)</span>
         </div>
         <div class="combat-meter-row">
           <span class="combat-meter-label">混合</span>
@@ -85,41 +94,50 @@ export class CombatHUD {
       </div>
 
       <nav id="combat-skill-dock" class="combat-glass-bar" aria-label="武侠招式快捷栏">
-        <button type="button" id="btn-action-attack" class="combat-skill-btn">
+        <button type="button" id="btn-action-attack" class="combat-skill-btn" title="来源：开源光学动捕库 · MakeHuman avatar_sword_strike_R.bvh (CC0)">
           <span class="combat-keycap">J / 左键</span>
           <span class="combat-skill-name">云台三落</span>
+          <span class="combat-origin-tag is-oss">开源·MH</span>
         </button>
-        <button type="button" id="btn-action-dash" class="combat-skill-btn">
+        <button type="button" id="btn-action-dash" class="combat-skill-btn" title="来源：开源光学动捕库 · CMU Mocap #49_04 剑刺突进 (Public Domain)">
           <span class="combat-keycap">Shift</span>
           <span class="combat-skill-name">苍龙出水</span>
+          <span class="combat-origin-tag is-oss">开源·CMU</span>
         </button>
-        <button type="button" id="btn-action-roll" class="combat-skill-btn">
+        <button type="button" id="btn-action-roll" class="combat-skill-btn" title="来源：开源光学动捕库 · CMU Mocap #90_34 前滚翻 (Public Domain)">
           <span class="combat-keycap">C</span>
           <span class="combat-skill-name">翻滚闪避</span>
+          <span class="combat-origin-tag is-oss">开源·CMU</span>
         </button>
-        <button type="button" id="btn-action-jump" class="combat-skill-btn">
+        <button type="button" id="btn-action-jump" class="combat-skill-btn" title="来源：开源光学动捕库 · CMU Mocap #83_62 轻功跳 / #140_08 鲤鱼打挺">
           <span class="combat-keycap">Space</span>
           <span class="combat-skill-name">轻功/打挺</span>
+          <span class="combat-origin-tag is-oss">开源·CMU</span>
         </button>
-        <button type="button" id="btn-action-wuhen" class="combat-skill-btn">
+        <button type="button" id="btn-action-wuhen" class="combat-skill-btn" title="来源：AI 视频姿态提取 (MediaPipe) ← 世界冠军李昕豫剑术实拍">
           <span class="combat-keycap">Q</span>
           <span class="combat-skill-name">无痕剑意</span>
+          <span class="combat-origin-tag is-ai">AI提取</span>
         </button>
-        <button type="button" id="btn-action-yuluo" class="combat-skill-btn">
+        <button type="button" id="btn-action-yuluo" class="combat-skill-btn" title="来源：AI 视频姿态提取 (MediaPipe) ← 北京武术队2012巡演实拍">
           <span class="combat-keycap">E</span>
           <span class="combat-skill-name">雨落云飞</span>
+          <span class="combat-origin-tag is-ai">AI提取</span>
         </button>
-        <button type="button" id="btn-action-feiyan" class="combat-skill-btn">
+        <button type="button" id="btn-action-feiyan" class="combat-skill-btn" title="来源：AI 视频姿态提取 (MediaPipe) ← 全国冠军王曦旋风跌叉实拍">
           <span class="combat-keycap">R</span>
           <span class="combat-skill-name">飞燕逐月</span>
+          <span class="combat-origin-tag is-ai">AI提取</span>
         </button>
-        <button type="button" id="btn-action-kick" class="combat-skill-btn">
+        <button type="button" id="btn-action-kick" class="combat-skill-btn" title="来源：开源光学动捕库 · MakeHuman avatar_kick_roundhouse_R.bvh (CC0)">
           <span class="combat-keycap">F</span>
           <span class="combat-skill-name">正蹬破防</span>
+          <span class="combat-origin-tag is-oss">开源·MH</span>
         </button>
-        <button type="button" id="btn-action-backflip" class="combat-skill-btn">
+        <button type="button" id="btn-action-backflip" class="combat-skill-btn" title="来源：开源光学动捕库 · MakeHuman avatar_backflip.bvh (CC0)">
           <span id="keycap-backflip" class="combat-keycap">V</span>
           <span class="combat-skill-name">燕回朝阳</span>
+          <span class="combat-origin-tag is-oss">开源·MH</span>
         </button>
       </nav>
     `;
@@ -148,7 +166,10 @@ export class CombatHUD {
       badgeCombo: q('#badge-combo'),
       badgeWuhen: q('#badge-wuhen-buff'),
       lblBaseClip: q('#lbl-base-clip'),
+      pillBaseOrigin: q('#pill-base-origin'),
       lblUpperClip: q('#lbl-upper-clip'),
+      pillUpperOrigin: q('#pill-upper-origin'),
+      lblOriginDetail: q('#lbl-combat-origin-detail'),
       barUpperAlpha: q('#bar-upper-alpha-fill'),
       lblUpperAlpha: q('#lbl-upper-alpha'),
       lblPlayerPos: q('#lbl-player-pos'),
@@ -271,11 +292,39 @@ export class CombatHUD {
     this._setClass('bWu', this.els.badgeWuhen, 'is-lit-amber', wuhenBuffRemainingMs > 0);
 
     this._setText('lBase', this.els.lblBaseClip, baseClipId || '—');
+    const baseProv = baseClipId ? resolveMotionProvenance({ clipId: baseClipId }) : null;
+    if (baseProv && this.els.pillBaseOrigin) {
+      this._setText('pBaseTxt', this.els.pillBaseOrigin, baseProv.tagShort);
+      this._setClass('pBaseAi', this.els.pillBaseOrigin, 'is-ai', baseProv.originGroup === 'ai_extracted');
+      this._setClass('pBaseOss', this.els.pillBaseOrigin, 'is-oss', baseProv.originGroup === 'open_mocap');
+    }
+
     this._setText(
       'lUp',
       this.els.lblUpperClip,
       upperClipId ? `${upperClipId} (移动挥砍)` : '— (全身轨道)'
     );
+    if (this.els.pillUpperOrigin) {
+      const hasUpper = Boolean(upperClipId);
+      if (this._cache.pUpHid !== !hasUpper) {
+        this._cache.pUpHid = !hasUpper;
+        this.els.pillUpperOrigin.hidden = !hasUpper;
+      }
+      if (hasUpper) {
+        const upProv = resolveMotionProvenance({ clipId: upperClipId });
+        this._setText('pUpTxt', this.els.pillUpperOrigin, upProv.tagShort);
+        this._setClass('pUpAi', this.els.pillUpperOrigin, 'is-ai', upProv.originGroup === 'ai_extracted');
+        this._setClass('pUpOss', this.els.pillUpperOrigin, 'is-oss', upProv.originGroup === 'open_mocap');
+      }
+    }
+
+    if (this.els.lblOriginDetail) {
+      const detailTxt = upperClipId
+        ? `下盘 ${baseProv?.tagShort || ''} + 上盘 ${resolveMotionProvenance({ clipId: upperClipId }).upstreamText}`
+        : baseProv?.upstreamText || '—';
+      this._setText('lOrigDet', this.els.lblOriginDetail, detailTxt);
+    }
+
     this._setScaleX('uAlB', this.els.barUpperAlpha, upperLayerAlpha);
     this._setText('uAlT', this.els.lblUpperAlpha, upperLayerAlpha.toFixed(2));
 

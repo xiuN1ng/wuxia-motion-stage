@@ -36,6 +36,7 @@ import {
   fetchAssetCatalog,
   findAssetInCatalog,
   populateAssetSelectElement,
+  resolveMotionProvenance,
 } from './ui/AssetLibraryCatalog.js';
 import { createWorkbenchPanel } from './ui/WorkbenchPanel.js';
 import { createTelemetryHUD } from './ui/TelemetryHUD.js';
@@ -332,6 +333,7 @@ const speedBtn = document.getElementById('btn-speed-cycle');
 const weaponBtn = document.getElementById('btn-toggle-weapon');
 const demoTaibaiBtn = document.getElementById('btn-demo-taibai');
 const assetSelectEl = document.getElementById('asset-library-select');
+const topOriginBadgeEl = document.getElementById('top-origin-badge');
 const toggleWorkbenchBtn = document.getElementById('btn-toggle-workbench');
 const workbenchDrawerEl = document.getElementById('workbench-drawer');
 const telemetryHudEl = document.getElementById('telemetry-hud');
@@ -391,10 +393,38 @@ const telemetryHUD = createTelemetryHUD(telemetryHudEl, {
   },
 });
 
+function computeActiveClipProvenance() {
+  if (!activeClip) return null;
+  const catItem =
+    findAssetInCatalog(assetCatalog, state.clipKey) ||
+    findAssetInCatalog(assetCatalog, activeClip.id);
+  return resolveMotionProvenance({
+    clipKey: state.clipKey || '',
+    clipId: activeClip.id || '',
+    clipName: activeClip.name || '',
+    path: catItem?.path || '',
+    category: catItem?.category || '',
+    kind: catItem?.kind || '',
+    originKind: activeClip.originKind || '',
+    sourceProvenance: catItem?.sourceProvenance || '',
+    sourceProvenanceDetail: catItem?.sourceProvenanceDetail || null,
+  });
+}
+
+function syncOriginBadgeDOM(prov) {
+  if (!prov || !topOriginBadgeEl) return;
+  topOriginBadgeEl.textContent = prov.tagShort || prov.badgeLabel;
+  topOriginBadgeEl.title = `${prov.badgeLabel} — ${prov.upstreamText}`;
+  topOriginBadgeEl.classList.toggle('is-origin-ai', prov.originGroup === 'ai_extracted');
+  topOriginBadgeEl.classList.toggle('is-origin-mocap', prov.originGroup === 'open_mocap');
+  topOriginBadgeEl.classList.toggle('is-origin-custom', prov.originGroup === 'custom_bvh');
+}
+
 populateAssetSelectElement(assetSelectEl, assetCatalog);
 fetchAssetCatalog().then((loaded) => {
   assetCatalog = loaded;
   populateAssetSelectElement(assetSelectEl, assetCatalog, assetSelectEl?.value || '');
+  if (activeClip) syncTelemetryHUD();
 });
 
 function evaluateCurrentRemap(u) {
@@ -412,6 +442,8 @@ function evaluateCurrentRemap(u) {
 
 function syncTelemetryHUD() {
   if (!pipelineResult || !activeClip) return;
+  const provenance = computeActiveClipProvenance();
+  syncOriginBadgeDOM(provenance);
   const fastRemapFn = createCombatTimeRemapper(
     activeClip,
     state.combatCurve,
@@ -424,6 +456,7 @@ function syncTelemetryHUD() {
     cleanTelemetry: pipelineResult.cleanTelemetry,
     combatCurve: state.combatCurve,
     remapFn: fastRemapFn,
+    provenance,
   });
 }
 
@@ -736,6 +769,9 @@ async function runVideoExtractionWorkflow({
     };
     syncTrimControlsUI();
 
+    if (sourceKind === 'file') {
+      result.clip.originKind = 'video_capture';
+    }
     loadActiveClip(result.clip, presetKey);
     state.playing = true;
     playPauseBtn.textContent = '暂停';
@@ -1025,7 +1061,7 @@ async function handleUploadedFile(file) {
   if (lower.endsWith('.bvh')) {
     try {
       const text = await file.text();
-      loadClipFromBVHText(text, file.name);
+      loadClipFromBVHText(text, file.name, { originKind: 'bvh_upload' });
       state.playing = true;
       playPauseBtn.textContent = '暂停';
     } catch (err) {
@@ -1048,6 +1084,7 @@ async function handleUploadedFile(file) {
         pipProgressText.textContent = txt;
       });
       result.clip.hasWeapon = inheritSword;
+      result.clip.originKind = 'image_capture';
       activeMediaUrl = result.mediaUrl;
       activeMediaOwned = true;
       pipImage.src = result.mediaUrl;
@@ -1679,6 +1716,9 @@ function loadClipFromBVHText(bvhText, fileName = 'Custom.bvh', options = {}) {
   }
   const opts = options && typeof options === 'object' ? options : {};
   const clip = parseBVHTextToClip(bvhText, fileName, opts);
+  if (opts.originKind) {
+    clip.originKind = opts.originKind;
+  }
 
   pipBox.hidden = true;
   clearMediaPreview();

@@ -51,17 +51,41 @@
 
         <span class="bar-divider" aria-hidden="true" data-workbench-ui></span>
 
-        <nav id="preset-nav" aria-label="动作预设" data-workbench-ui>
-          <button type="button" id="btn-clip-slash" class="chip-btn active" data-clip="slash">
+        <nav id="preset-nav" aria-label="动作预设（开源动捕库）" data-workbench-ui>
+          <button
+            type="button"
+            id="btn-clip-slash"
+            class="chip-btn active"
+            data-clip="slash"
+            title="来源：开源光学动捕库 · MakeHuman avatar_sword_strike_R.bvh (CC0)"
+          >
             剑术连斩
           </button>
-          <button type="button" id="btn-clip-kick" class="chip-btn" data-clip="kick">
+          <button
+            type="button"
+            id="btn-clip-kick"
+            class="chip-btn"
+            data-clip="kick"
+            title="来源：开源光学动捕库 · CMU Mocap #87_01 (Public Domain)"
+          >
             回旋踢
           </button>
-          <button type="button" id="btn-clip-backflip" class="chip-btn" data-clip="backflip">
+          <button
+            type="button"
+            id="btn-clip-backflip"
+            class="chip-btn"
+            data-clip="backflip"
+            title="来源：开源光学动捕库 · MakeHuman avatar_backflip.bvh (CC0)"
+          >
             后空翻
           </button>
-          <button type="button" id="btn-clip-run" class="chip-btn" data-clip="run">
+          <button
+            type="button"
+            id="btn-clip-run"
+            class="chip-btn"
+            data-clip="run"
+            title="来源：开源光学动捕库 · MakeHuman avatar_run.bvh (CC0)"
+          >
             奔跑
           </button>
         </nav>
@@ -70,20 +94,29 @@
           id="asset-library-select"
           class="asset-select"
           aria-label="内置动作与视频资产库"
-          title="选择内置标准 BVH 成品动作或太白武术参考视频"
+          title="按来源分类浏览：开源光学动捕库 (22套) vs AI 视频姿态提取成品 (4套) vs 实拍参考视频 (5段)"
           data-workbench-ui
         >
-          <option value="">内置资产库 (BVH / 太白实拍)...</option>
+          <option value="">动作库 (开源库 22套 / AI提取 4套)...</option>
         </select>
+
+        <span
+          id="top-origin-badge"
+          class="top-origin-pill is-origin-mocap"
+          title="当前预览动作的数据来源类型"
+          data-workbench-ui
+        >
+          开源 · MakeHuman
+        </span>
 
         <button
           type="button"
           id="btn-demo-taibai"
           class="demo-video-btn"
-          title="实测工作流：从真实中国武术冠军实拍视频实时提取 3D 骨骼、双骨 IK 锁脚并复刻太白剑意身法"
+          title="来源：AI 视频提取 (MediaPipe Heavy) ← 世界冠军李昕豫实拍视频实时提取 3D 骨骼并锁脚"
           data-workbench-ui
         >
-          太白剑意·视频实测
+          AI提取·太白实测
         </button>
 
         <label

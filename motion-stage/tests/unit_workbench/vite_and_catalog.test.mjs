@@ -9,6 +9,7 @@ import {
   mergeManifestWithCatalog,
   findAssetInCatalog,
   populateAssetSelectElement,
+  resolveMotionProvenance,
 } from '../../src/ui/AssetLibraryCatalog.js';
 
 const BVH_LIB_DIR = '/home/antigravity/bvh_library';
@@ -224,3 +225,30 @@ test('F9 & Contract 2: AssetLibraryCatalog covers presets, 01b-05 videos, B_clea
     globalThis.document = prevDoc;
   }
 });
+
+test('Motion provenance classifier distinguishes AI video extraction vs open-source mocap (MakeHuman & CMU)', () => {
+  for (const item of STATIC_ASSET_CATALOG) {
+    const prov = resolveMotionProvenance({
+      clipKey: item.presetKey || item.id,
+      clipId: item.id,
+      clipName: item.label,
+      path: item.path || '',
+      category: item.category,
+      kind: item.kind,
+    });
+    if (item.category === 'c_taibai' || item.category === 'videos') {
+      assert.equal(prov.originGroup, 'ai_extracted', `${item.id} should be ai_extracted`);
+      assert.equal(prov.tagShort, 'AI提取');
+    } else {
+      assert.equal(prov.originGroup, 'open_mocap', `${item.id} should be open_mocap`);
+      assert.ok(prov.tagShort === '开源·CMU' || prov.tagShort === '开源·MH', `Unexpected tag ${prov.tagShort}`);
+    }
+  }
+
+  assert.equal(resolveMotionProvenance({ clipId: 'taibai_02' }).originGroup, 'ai_extracted');
+  assert.equal(resolveMotionProvenance({ clipId: 'combo_1' }).tagShort, '开源·MH');
+  assert.equal(resolveMotionProvenance({ clipId: '07_strafe_F' }).tagShort, '开源·CMU');
+  assert.equal(resolveMotionProvenance({ originKind: 'video_capture', clipName: 'demo.mp4' }).originGroup, 'ai_extracted');
+  assert.equal(resolveMotionProvenance({ originKind: 'bvh_upload', clipName: 'custom.bvh' }).originGroup, 'custom_bvh');
+});
+
