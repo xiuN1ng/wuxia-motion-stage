@@ -1,6 +1,7 @@
 export const ASSET_CATEGORY_ORDER = [
   { key: 'presets', label: '内置退化对比预设 · 开源动捕库 (MakeHuman / CMU)' },
-  { key: 'videos', label: '武术与太白实拍视频 · AI 实时姿态提取 (MediaPipe)' },
+  { key: 'clear_demos', label: '高清实拍样片 · AI 提取对比 (4套 · 固定机位含原片画中画)' },
+  { key: 'videos', label: '武术与高清实拍视频 · AI 实时姿态提取 (MediaPipe)' },
   { key: 'b_cleaned', label: 'B_cleaned_ready · 开源光学动捕库 (22套 · CMU / MakeHuman)' },
   { key: 'c_taibai', label: 'C_taibai_extracted · AI 视频提取成品 (4套 · 天刀太白)' },
 ];
@@ -52,7 +53,105 @@ export const STATIC_ASSET_CATALOG = [
     preserveRootMotion: false,
   },
 
-  // 2. Reference Wushu / Taibai Videos
+  // 1.5 Clear Fixed-Camera Studio Martial-Arts Captures (Instant 60fps BVH + Synchronized Reference Video PiP)
+  {
+    id: 'clear_bvh:06_roundhouse_kick',
+    kind: 'bvh',
+    category: 'clear_demos',
+    label: '06 回旋高踢破防 · 高清棚拍提取 (353f · 100%检出)',
+    path: '/demo/clear_captures/06_clear_roundhouse_kick_回旋高踢破防_60fps.bvh',
+    sourceVideoUrl: '/reference_videos/06_清晰实拍_回旋高踢破防_720p_CC-BY-2.0.mp4',
+    fallbackVideoUrl: '/reference_videos/06_清晰实拍_回旋高踢破防_720p_CC-BY-2.0.mp4',
+    cyclic: false,
+    hasWeapon: false,
+    isCombatAttack: true,
+    preserveRootMotion: true,
+  },
+  {
+    id: 'clear_bvh:07_kata_strike',
+    kind: 'bvh',
+    category: 'clear_demos',
+    label: '07 弓步架冲连击 · 高清棚拍提取 (340f · 13.1°极稳)',
+    path: '/demo/clear_captures/07_clear_kata_strike_弓步架冲连击_60fps.bvh',
+    sourceVideoUrl: '/reference_videos/07_清晰实拍_弓步架冲连击_720p_CC-BY-2.0.mp4',
+    fallbackVideoUrl: '/reference_videos/07_清晰实拍_弓步架冲连击_720p_CC-BY-2.0.mp4',
+    cyclic: false,
+    hasWeapon: false,
+    isCombatAttack: true,
+    preserveRootMotion: true,
+  },
+  {
+    id: 'clear_bvh:08_fan_wushu',
+    kind: 'bvh',
+    category: 'clear_demos',
+    label: '08 折扇武学连招 · 720p白墙实拍 (357f · 100%检出)',
+    path: '/demo/clear_captures/08_clear_fan_wushu_折扇武学连招_60fps.bvh',
+    sourceVideoUrl: '/reference_videos/08_清晰实拍_折扇武学连招_720p_CC-BY-SA-3.0.mp4',
+    fallbackVideoUrl: '/reference_videos/08_清晰实拍_折扇武学连招_720p_CC-BY-SA-3.0.mp4',
+    cyclic: false,
+    hasWeapon: false,
+    isCombatAttack: true,
+    preserveRootMotion: true,
+  },
+  {
+    id: 'clear_bvh:09_drunken_fist',
+    kind: 'bvh',
+    category: 'clear_demos',
+    label: '09 醉拳身法套路 · 720p亮厅实拍 (365f · 99.3%检出)',
+    path: '/demo/clear_captures/09_clear_drunken_fist_醉拳身法套路_60fps.bvh',
+    sourceVideoUrl: '/reference_videos/09_清晰实拍_醉拳身法套路_720p_CC-BY-SA-3.0.mp4',
+    fallbackVideoUrl: '/reference_videos/09_清晰实拍_醉拳身法套路_720p_CC-BY-SA-3.0.mp4',
+    cyclic: false,
+    hasWeapon: false,
+    isCombatAttack: true,
+    preserveRootMotion: true,
+  },
+
+  // 2. Reference Wushu / Taibai & Clear Studio Videos (Live MediaPipe Extraction)
+  {
+    id: 'video:06',
+    kind: 'video',
+    category: 'videos',
+    label: '06 高清实拍·回旋高踢破防 · 5.8s [实时AI提取]',
+    path: '/reference_videos/06_清晰实拍_回旋高踢破防_720p_CC-BY-2.0.mp4',
+    cyclic: false,
+    hasWeapon: false,
+    isCombatAttack: true,
+    preserveRootMotion: true,
+  },
+  {
+    id: 'video:07',
+    kind: 'video',
+    category: 'videos',
+    label: '07 高清实拍·弓步架冲连击 · 5.6s [实时AI提取]',
+    path: '/reference_videos/07_清晰实拍_弓步架冲连击_720p_CC-BY-2.0.mp4',
+    cyclic: false,
+    hasWeapon: false,
+    isCombatAttack: true,
+    preserveRootMotion: true,
+  },
+  {
+    id: 'video:08',
+    kind: 'video',
+    category: 'videos',
+    label: '08 高清实拍·折扇武学连招 · 5.9s [实时AI提取]',
+    path: '/reference_videos/08_清晰实拍_折扇武学连招_720p_CC-BY-SA-3.0.mp4',
+    cyclic: false,
+    hasWeapon: false,
+    isCombatAttack: true,
+    preserveRootMotion: true,
+  },
+  {
+    id: 'video:09',
+    kind: 'video',
+    category: 'videos',
+    label: '09 高清实拍·醉拳身法套路 · 6.0s [实时AI提取]',
+    path: '/reference_videos/09_清晰实拍_醉拳身法套路_720p_CC-BY-SA-3.0.mp4',
+    cyclic: false,
+    hasWeapon: false,
+    isCombatAttack: true,
+    preserveRootMotion: true,
+  },
   {
     id: 'video:01b',
     kind: 'video',
@@ -560,6 +659,34 @@ const KNOWN_ORIGIN_LOOKUP = [
     upstreamText: '北京武术队2012巡演75.9s母带 (CC BY 3.0)',
   },
   {
+    match: /(clear_bvh:06|06_clear_roundhouse|video:06|06_清晰实拍)/i,
+    originGroup: 'ai_extracted',
+    tagShort: 'AI提取',
+    badgeLabel: 'AI 视频提取 · 高清棚拍样片',
+    upstreamText: 'Wikimedia Kihon Mawashi Geri 棚拍回旋踢 (CC BY 2.0)',
+  },
+  {
+    match: /(clear_bvh:07|07_clear_kata|video:07|07_清晰实拍)/i,
+    originGroup: 'ai_extracted',
+    tagShort: 'AI提取',
+    badgeLabel: 'AI 视频提取 · 高清棚拍样片',
+    upstreamText: 'Wikimedia Heian Godan 棚拍弓步连击 (CC BY 2.0)',
+  },
+  {
+    match: /(clear_bvh:08|08_clear_fan|video:08|08_清晰实拍)/i,
+    originGroup: 'ai_extracted',
+    tagShort: 'AI提取',
+    badgeLabel: 'AI 视频提取 · 高清白墙实拍',
+    upstreamText: 'Wikimedia Quan Khi Dao 折扇武学 720p (CC BY-SA 3.0)',
+  },
+  {
+    match: /(clear_bvh:09|09_clear_drunken|video:09|09_清晰实拍)/i,
+    originGroup: 'ai_extracted',
+    tagShort: 'AI提取',
+    badgeLabel: 'AI 视频提取 · 高清亮厅实拍',
+    upstreamText: 'Wikimedia Drunken Form 醉拳身法 720p (CC BY-SA 3.0)',
+  },
+  {
     match: /(^|:)(01_idle|wuxia_01_idle|01_wuxia_idle)/i,
     originGroup: 'open_mocap',
     tagShort: '开源·MH',
@@ -740,8 +867,10 @@ export function resolveMotionProvenance(input = {}) {
   if (
     kind === 'video' ||
     category === 'videos' ||
+    category === 'clear_demos' ||
     category === 'c_taibai' ||
     path.includes('/C_taibai_extracted/') ||
+    path.includes('/demo/clear_captures/') ||
     path.includes('/reference_videos/') ||
     provStr.includes('mediapipe') ||
     provStr.includes('video')

@@ -43,3 +43,23 @@ Under the following terms:
 ## 3. Excluded Promotional Reference Clips (Not Tracked in Public Git)
 
 - Promotional gameplay/cinematic reference clips `reference_videos/01_*` and `reference_videos/01b_*` (*Moonlight Blade* / 天涯明月刀太白门派演示, Tencent Games) are **strictly excluded** from Git version control via `.gitignore` (`reference_videos/01*`) and are retained solely in private research storage for internal pose benchmarking.
+
+---
+
+## 4. Clear Studio Martial-Arts Reference Clips (Wikimedia Commons — `CC BY 2.0` / `CC BY-SA 3.0`)
+
+The following single-performer, fixed-camera studio martial-arts clips (trimmed to 5.6s–6.0s H.264 24fps segments) and their derived demo 21-bone `.bvh` captures in `motion-stage/public/demo/clear_captures/` are sourced from Wikimedia Commons:
+
+- `reference_videos/06_清晰实拍_回旋高踢破防_720p_CC-BY-2.0.mp4` & `06_clear_roundhouse_kick_回旋高踢破防_60fps.bvh`
+  - Source: `File:Kihon for the 6th kyu test.ogv` (`106.5s–112.3s`, *Mawashi Geri* roundhouse kick)
+  - Attribution: **ColoradoKarateClub** — **CC BY 2.0** (https://creativecommons.org/licenses/by/2.0/)
+- `reference_videos/07_清晰实拍_弓步架冲连击_720p_CC-BY-2.0.mp4` & `07_clear_kata_strike_弓步架冲连击_60fps.bvh`
+  - Source: `File:Heian Godan.ogv` (`7.2s–12.8s`, *Heian Godan* kata bow-stance strike combo)
+  - Attribution: **ColoradoKarateClub** — **CC BY 2.0** (https://creativecommons.org/licenses/by/2.0/)
+- `reference_videos/08_清晰实拍_折扇武学连招_720p_CC-BY-SA-3.0.mp4` & `08_clear_fan_wushu_折扇武学连招_60fps.bvh`
+  - Source: `File:Carole Bo Ram Autret en Quan Khi Dao.ogv` (`17.6s–23.5s`, Quan Khi Dao fan wushu combo)
+  - Attribution: **Philippe Saget** (Wikimedia Commons) — **CC BY-SA 3.0** (https://creativecommons.org/licenses/by-sa/3.0/)
+- `reference_videos/09_清晰实拍_醉拳身法套路_720p_CC-BY-SA-3.0.mp4` & `09_clear_drunken_fist_醉拳身法套路_60fps.bvh`
+  - Source: `File:Alex Chui Quan - drunken form.webm` (`39.8s–45.8s`, Drunken Fist wushu form)
+  - Attribution: **TMDNE / Oom Yung Doe** (Wikimedia Commons) — **CC BY-SA 3.0** (https://creativecommons.org/licenses/by-sa/3.0/)
+

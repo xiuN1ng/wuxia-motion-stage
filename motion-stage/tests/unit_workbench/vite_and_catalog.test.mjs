@@ -139,16 +139,24 @@ test('Contract 4: vite.config.js static range middleware serves 200, 206 Partial
   void path;
 });
 
-test('F9 & Contract 2: AssetLibraryCatalog covers presets, 01b-05 videos, B_cleaned_ready 01-15, and C_taibai_extracted', () => {
+test('F9 & Contract 2: AssetLibraryCatalog covers presets, clear demos, 01b-09 videos, B_cleaned_ready 01-15, and C_taibai_extracted', () => {
   const presets = STATIC_ASSET_CATALOG.filter((x) => x.category === 'presets');
+  const clearDemos = STATIC_ASSET_CATALOG.filter((x) => x.category === 'clear_demos');
   const videos = STATIC_ASSET_CATALOG.filter((x) => x.category === 'videos');
   const bCleaned = STATIC_ASSET_CATALOG.filter((x) => x.category === 'b_cleaned');
   const cTaibai = STATIC_ASSET_CATALOG.filter((x) => x.category === 'c_taibai');
 
   assert.equal(presets.length, 4);
-  assert.equal(videos.length, 5);
+  assert.equal(clearDemos.length, 4);
+  assert.equal(videos.length, 9);
   assert.equal(bCleaned.length, 22); // 01..06 (6) + 07 8-way (8) + 08..15 (8) = 22!
   assert.equal(cTaibai.length, 4);
+
+  // Verify clear demo BVH entries carry synchronized reference video URLs
+  for (const item of clearDemos) {
+    assert.ok(item.path?.startsWith('/demo/clear_captures/'));
+    assert.ok(item.sourceVideoUrl?.startsWith('/reference_videos/'));
+  }
 
   // Verify video:05 has pre-configured fast-sword Wushu slice [26.72, 31.77]
   const v05 = findAssetInCatalog(STATIC_ASSET_CATALOG, 'video:05');
@@ -218,8 +226,8 @@ test('F9 & Contract 2: AssetLibraryCatalog covers presets, 01b-05 videos, B_clea
       },
     };
     populateAssetSelectElement(mockSelect, merged, 'c_bvh:taibai_03');
-    // 1 placeholder + 4 optgroups
-    assert.equal(mockSelect.children.length, 5);
+    // 1 placeholder + 5 optgroups
+    assert.equal(mockSelect.children.length, 6);
     assert.equal(mockSelect.value, 'c_bvh:taibai_03');
   } finally {
     globalThis.document = prevDoc;
@@ -236,7 +244,7 @@ test('Motion provenance classifier distinguishes AI video extraction vs open-sou
       category: item.category,
       kind: item.kind,
     });
-    if (item.category === 'c_taibai' || item.category === 'videos') {
+    if (item.category === 'c_taibai' || item.category === 'videos' || item.category === 'clear_demos') {
       assert.equal(prov.originGroup, 'ai_extracted', `${item.id} should be ai_extracted`);
       assert.equal(prov.tagShort, 'AI提取');
     } else {
@@ -246,6 +254,7 @@ test('Motion provenance classifier distinguishes AI video extraction vs open-sou
   }
 
   assert.equal(resolveMotionProvenance({ clipId: 'taibai_02' }).originGroup, 'ai_extracted');
+  assert.equal(resolveMotionProvenance({ clipId: 'clear_bvh:06_roundhouse_kick' }).originGroup, 'ai_extracted');
   assert.equal(resolveMotionProvenance({ clipId: 'combo_1' }).tagShort, '开源·MH');
   assert.equal(resolveMotionProvenance({ clipId: '07_strafe_F' }).tagShort, '开源·CMU');
   assert.equal(resolveMotionProvenance({ originKind: 'video_capture', clipName: 'demo.mp4' }).originGroup, 'ai_extracted');

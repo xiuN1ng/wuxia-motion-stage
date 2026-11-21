@@ -21,6 +21,7 @@ import {
   resolveTrimSamplingPlan,
   normalizeVideoUrlCallArgs,
   landmarksToHumanoidFrame,
+  stabilizeCapturedSequence,
   calibrateVideoSequenceMetrics,
 } from '../../src/capture/VideoPoseCapture.js';
 
@@ -357,4 +358,83 @@ test('F6: landmarksToHumanoidFrame & calibrateVideoSequenceMetrics produce groun
     }
   }
   assert.ok(seq[3].rootPos.x > seq[0].rootPos.x, 'Horizontal stride metric calibration should preserve +X translation');
+});
+
+test('F6: upgraded VideoPoseCapture eliminates flamingo knee flips, 180-deg arm singularities, 1-frame spikes, and perspective levitation', () => {
+  const makeBaseWorld = () => {
+    const world = Array.from({ length: 33 }, () => ({ x: 0, y: 0, z: 0 }));
+    world[0] = { x: 0, y: -0.62, z: -0.08 };
+    world[7] = { x: 0.07, y: -0.60, z: 0 };
+    world[8] = { x: -0.07, y: -0.60, z: 0 };
+    world[11] = { x: 0.18, y: -0.42, z: 0 };
+    world[12] = { x: -0.18, y: -0.42, z: 0 };
+    world[13] = { x: 0.42, y: -0.42, z: 0 };
+    world[14] = { x: -0.42, y: -0.42, z: 0 };
+    world[15] = { x: 0.66, y: -0.42, z: -0.04 };
+    world[16] = { x: -0.66, y: -0.42, z: -0.04 };
+    world[17] = { x: 0.74, y: -0.43, z: -0.04 };
+    world[19] = { x: 0.74, y: -0.41, z: -0.06 };
+    world[21] = { x: 0.72, y: -0.39, z: -0.07 };
+    world[18] = { x: -0.74, y: -0.43, z: -0.04 };
+    world[20] = { x: -0.74, y: -0.41, z: -0.06 };
+    world[22] = { x: -0.72, y: -0.39, z: -0.07 };
+    world[23] = { x: 0.11, y: 0.0, z: 0 };
+    world[24] = { x: -0.11, y: 0.0, z: 0 };
+    world[25] = { x: 0.11, y: 0.41, z: -0.03 };
+    world[26] = { x: -0.11, y: 0.41, z: -0.03 };
+    world[27] = { x: 0.11, y: 0.82, z: 0 };
+    world[28] = { x: -0.11, y: 0.82, z: 0 };
+    world[29] = { x: 0.11, y: 0.84, z: 0.03 };
+    world[30] = { x: -0.11, y: 0.84, z: 0.03 };
+    world[31] = { x: 0.11, y: 0.84, z: -0.10 };
+    world[32] = { x: -0.11, y: 0.84, z: -0.10 };
+    return world;
+  };
+
+  // 1. Reversed foot landmarks (toe behind heel) must NOT flip LeftUpLeg/LeftLeg 180 degrees
+  const wNormal = makeBaseWorld();
+  const wFlippedFoot = makeBaseWorld();
+  wFlippedFoot[31] = { x: 0.11, y: 0.84, z: 0.14 }; // toe behind heel
+  wFlippedFoot[29] = { x: 0.11, y: 0.84, z: -0.06 };
+  const fNormal = landmarksToHumanoidFrame(wNormal, null);
+  const fFlipped = landmarksToHumanoidFrame(wFlippedFoot, null);
+  const thighDot = Math.abs(fNormal.quats[BONE_IDX.LeftUpLeg].dot(fFlipped.quats[BONE_IDX.LeftUpLeg]));
+  const shinDot = Math.abs(fNormal.quats[BONE_IDX.LeftLeg].dot(fFlipped.quats[BONE_IDX.LeftLeg]));
+  assert.ok(thighDot > 0.9, `Flamingo thigh flip detected on reversed foot landmark: dot=${thighDot}`);
+  assert.ok(shinDot > 0.9, `Flamingo shin flip detected on reversed foot landmark: dot=${shinDot}`);
+
+  // 2. Cross-chest arm (Left arm pointing -X, antipodal to restLeft) remains finite, smooth & non-singular
+  const wCrossA = makeBaseWorld();
+  const wCrossB = makeBaseWorld();
+  wCrossA[13] = { x: -0.06, y: -0.41, z: -0.04 };
+  wCrossA[15] = { x: -0.24, y: -0.38, z: -0.08 };
+  wCrossB[13] = { x: -0.06, y: -0.43, z: -0.04 };
+  wCrossB[15] = { x: -0.24, y: -0.40, z: -0.08 };
+  const fCrossA = landmarksToHumanoidFrame(wCrossA, null);
+  const fCrossB = landmarksToHumanoidFrame(wCrossB, null);
+  const armJumpDeg =
+    (2 * Math.acos(Math.min(1, Math.abs(fCrossA.quats[BONE_IDX.LeftUpperArm].dot(fCrossB.quats[BONE_IDX.LeftUpperArm])))) * 180) /
+    Math.PI;
+  assert.ok(armJumpDeg < 20, `Cross-chest arm singularity jump detected: ${armJumpDeg.toFixed(1)} deg`);
+
+  // 3. Single-frame 110-deg glitch spike is suppressed by stabilizeCapturedSequence
+  const spikeSeq = [0, 1, 2].map(() => landmarksToHumanoidFrame(makeBaseWorld(), null));
+  spikeSeq[1].quats[BONE_IDX.RightUpperArm].setFromAxisAngle(new THREE.Vector3(0, 1, 0), (110 * Math.PI) / 180);
+  stabilizeCapturedSequence(spikeSeq);
+  const residualDeg =
+    (2 * Math.acos(Math.min(1, Math.abs(spikeSeq[0].quats[BONE_IDX.RightUpperArm].dot(spikeSeq[1].quats[BONE_IDX.RightUpperArm])))) * 180) /
+    Math.PI;
+  assert.ok(residualDeg < 5, `Single-frame spike was not suppressed: residual=${residualDeg.toFixed(1)} deg`);
+
+  // 4. Slow upstage perspective walk (lowestAnkleY drifts smoothly from 0.88 -> 0.80) stays grounded (no levitation)
+  const walkSeq = Array.from({ length: 24 }, (_, idx) => {
+    const w = makeBaseWorld();
+    const yShift = -(idx / 23) * 0.08;
+    const norm = w.map((p) => ({ x: 0.5 + p.x * 0.4, y: 0.52 + yShift + p.y * 0.42, z: p.z }));
+    return landmarksToHumanoidFrame(w, norm);
+  });
+  calibrateVideoSequenceMetrics(walkSeq);
+  const maxRootY = Math.max(...walkSeq.map((f) => f.rootPos.y));
+  const minRootY = Math.min(...walkSeq.map((f) => f.rootPos.y));
+  assert.ok(maxRootY - minRootY < 0.03, `Perspective levitation detected: deltaY=${(maxRootY - minRootY).toFixed(3)}m`);
 });

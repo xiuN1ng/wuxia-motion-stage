@@ -240,6 +240,13 @@ function percentile(values, q) {
   return THREE.MathUtils.lerp(sorted[lo], sorted[hi], pos - lo);
 }
 
+function normalizeQuatSafe(q) {
+  if (!q || !Number.isFinite(q.x + q.y + q.z + q.w) || q.lengthSq() < 1e-12) {
+    return q.set(0, 0, 0, 1);
+  }
+  return q.normalize();
+}
+
 /**
  * Converts MediaPipe 33 worldLandmarks (+x right, +y down, +z away)
  * into Three.js right-handed world space (+X left-of-body/viewer-right, +Y up, +Z toward camera)
@@ -262,13 +269,6 @@ export function landmarksToHumanoidFrame(worldLm, normLm) {
   const vZ = new THREE.Vector3();
   const mat = new THREE.Matrix4();
   const qParentInv = new THREE.Quaternion();
-
-  const normalizeQuatSafe = (q) => {
-    if (!q || !Number.isFinite(q.x + q.y + q.z + q.w) || q.lengthSq() < 1e-12) {
-      return q.set(0, 0, 0, 1);
-    }
-    return q.normalize();
-  };
 
   // Returns a unit vector strictly orthogonal to unitAxis, preferring preferredVec when non-collinear
   const makePerpUnit = (unitAxis, preferredVec = null) => {
@@ -360,7 +360,7 @@ export function landmarksToHumanoidFrame(worldLm, normLm) {
   setBoneWorldQuat(BONE_IDX.Spine, qSpineWorld);
   setBoneWorldQuat(BONE_IDX.Chest, qChestWorld);
 
-  // 3. Neck & Head (7 = LeftEar, 8 = RightEar, 0 = Nose)
+  // 3. Neck & Head (7 = LeftEar, 8 = RightEar, 0 = Nose) with back-view flip guard
   const earMid = new THREE.Vector3().addVectors(P[7], P[8]).multiplyScalar(0.5);
   const hX = new THREE.Vector3().subVectors(P[7], P[8]);
   if (hX.lengthSq() < 1e-8) {
@@ -368,57 +368,146 @@ export function landmarksToHumanoidFrame(worldLm, normLm) {
   } else {
     hX.normalize();
   }
+  if (hX.dot(cX) < -0.25) {
+    hX.lerp(cX, 0.7).normalize();
+  }
   const hZ = new THREE.Vector3().subVectors(P[0], earMid);
   if (hZ.lengthSq() < 1e-8) {
     hZ.copy(cZ);
   } else {
     hZ.normalize();
+    // Stabilize monocular nose-vs-ear elevation bias & prevent back-facing head flips
+    if (hZ.dot(cZ) < 0.15) {
+      hZ.lerp(cZ, 0.72);
+    } else {
+      hZ.lerp(cZ, 0.22);
+    }
+    if (hZ.lengthSq() < 1e-8) hZ.copy(cZ);
+    else hZ.normalize();
   }
   const hY = new THREE.Vector3().crossVectors(hZ, hX);
   if (hY.lengthSq() < 1e-8) {
     hY.copy(makePerpUnit(hX, cY));
   } else {
     hY.normalize();
+    if (hY.dot(cY) < 0.35) {
+      hY.lerp(cY, 0.65);
+      if (hY.lengthSq() < 1e-8) hY.copy(makePerpUnit(hX, cY));
+      else hY.normalize();
+    }
   }
+  hX.crossVectors(hY, hZ);
+  if (hX.lengthSq() < 1e-8) hX.copy(makePerpUnit(hY, cX));
+  else hX.normalize();
   hZ.crossVectors(hX, hY).normalize();
   mat.makeBasis(hX, hY, hZ);
   const qHeadWorld = normalizeQuatSafe(new THREE.Quaternion().setFromRotationMatrix(mat));
   setBoneWorldQuat(BONE_IDX.Neck, normalizeQuatSafe(qChestWorld.clone().slerp(qHeadWorld, 0.4)));
   setBoneWorldQuat(BONE_IDX.Head, qHeadWorld);
 
-  // Helper to orient a single limb segment from bindRestDir -> targetWorldDir
-  const restLeft = new THREE.Vector3(1, 0, 0);
-  const restRight = new THREE.Vector3(-1, 0, 0);
-  const restDown = new THREE.Vector3(0, -1, 0);
-  const segDir = new THREE.Vector3();
-
-  const alignLimbSegment = (boneIdx, pStart, pEnd, restVec, fallbackQuat) => {
-    segDir.subVectors(pEnd, pStart);
-    if (segDir.lengthSq() < 1e-8) {
-      setBoneWorldQuat(boneIdx, fallbackQuat);
-      return fallbackQuat.clone();
+  // Singularity-free chest-relative arm basis solver (eliminates 180-deg cross-chest/back-turn twist flips)
+  const solveArmFromLandmarks = (upIdx, foreIdx, sideSign, pShoulder, pElbow, pWrist) => {
+    const restDir = cX.clone().multiplyScalar(sideSign);
+    const rawUpper = new THREE.Vector3().subVectors(pElbow, pShoulder);
+    if (rawUpper.lengthSq() < 1e-8) {
+      rawUpper.copy(restDir);
+    } else {
+      rawUpper.normalize();
     }
-    segDir.normalize();
-    const qSwing = normalizeQuatSafe(new THREE.Quaternion().setFromUnitVectors(restVec, segDir));
-    setBoneWorldQuat(boneIdx, qSwing);
-    return qSwing;
+
+    const dotUp = THREE.MathUtils.clamp(restDir.dot(rawUpper), -1, 1);
+    let qSwingArm;
+    if (dotUp < -0.92) {
+      qSwingArm = new THREE.Quaternion().setFromAxisAngle(cY, sideSign * Math.acos(dotUp));
+    } else {
+      qSwingArm = new THREE.Quaternion().setFromUnitVectors(restDir, rawUpper);
+    }
+    normalizeQuatSafe(qSwingArm);
+
+    const xUp = rawUpper.clone().multiplyScalar(sideSign).normalize();
+    const yBase = cY.clone().applyQuaternion(qSwingArm);
+    yBase.addScaledVector(xUp, -yBase.dot(xUp));
+    if (yBase.lengthSq() < 1e-8) {
+      yBase.copy(makePerpUnit(xUp, cY));
+    } else {
+      yBase.normalize();
+    }
+    const zBase = new THREE.Vector3().crossVectors(xUp, yBase).normalize();
+
+    const rawFore = new THREE.Vector3().subVectors(pWrist, pElbow);
+    const hasFore = rawFore.lengthSq() >= 1e-8;
+    if (hasFore) {
+      rawFore.normalize();
+    } else {
+      rawFore.copy(rawUpper);
+    }
+
+    // Subtle bounded shoulder roll toward the elbow-bend plane when the elbow is clearly flexed
+    const bend = rawFore.clone().addScaledVector(rawUpper, -rawFore.dot(rawUpper));
+    const bendLen = bend.length();
+    const zUp = zBase.clone();
+    if (hasFore && bendLen > 0.14) {
+      bend.divideScalar(bendLen);
+      const twistW =
+        THREE.MathUtils.smoothstep(bendLen, 0.14, 0.45) *
+        THREE.MathUtils.smoothstep(bend.dot(zBase), -0.25, 0.35) *
+        0.42;
+      zUp.lerp(bend, twistW);
+      zUp.addScaledVector(xUp, -zUp.dot(xUp));
+      if (zUp.lengthSq() > 1e-8) zUp.normalize();
+      else zUp.copy(zBase);
+    }
+    const yUp = new THREE.Vector3().crossVectors(zUp, xUp);
+    if (yUp.lengthSq() < 1e-8) yUp.copy(yBase);
+    else yUp.normalize();
+    zUp.crossVectors(xUp, yUp).normalize();
+    mat.makeBasis(xUp, yUp, zUp);
+    const qUp = normalizeQuatSafe(new THREE.Quaternion().setFromRotationMatrix(mat));
+    setBoneWorldQuat(upIdx, qUp);
+
+    // Forearm inherits upper-arm twist via minimal hinge swing (zero sudden axial spin at elbow)
+    const xLo = rawFore.clone().multiplyScalar(sideSign).normalize();
+    const dotElb = THREE.MathUtils.clamp(xUp.dot(xLo), -1, 1);
+    let qElbSwing;
+    if (dotElb < -0.92) {
+      qElbSwing = new THREE.Quaternion().setFromAxisAngle(yUp, Math.acos(dotElb));
+    } else {
+      qElbSwing = new THREE.Quaternion().setFromUnitVectors(xUp, xLo);
+    }
+    normalizeQuatSafe(qElbSwing);
+
+    const yLo = yUp.clone().applyQuaternion(qElbSwing);
+    yLo.addScaledVector(xLo, -yLo.dot(xLo));
+    if (yLo.lengthSq() < 1e-8) {
+      yLo.copy(makePerpUnit(xLo, yUp));
+    } else {
+      yLo.normalize();
+    }
+    const zLo = new THREE.Vector3().crossVectors(xLo, yLo).normalize();
+    mat.makeBasis(xLo, yLo, zLo);
+    const qLo = normalizeQuatSafe(new THREE.Quaternion().setFromRotationMatrix(mat));
+    setBoneWorldQuat(foreIdx, qLo);
+
+    return { qUp, qLo, foreDir: rawFore };
   };
 
   // 4A. Left Arm (11 -> 13 -> 15) + 6-DoF LeftHand (17 = Pinky, 19 = Index, 21 = Thumb)
   bones[BONE_IDX.LeftShoulder].quaternion.identity();
   bones[BONE_IDX.LeftShoulder].updateWorldMatrix(false, false);
-  const qLUA = alignLimbSegment(BONE_IDX.LeftUpperArm, P[11], P[13], restLeft, qChestWorld);
-  const qLFA = alignLimbSegment(BONE_IDX.LeftForeArm, P[13], P[15], restLeft, qLUA);
+  const { foreDir: foreDirL } = solveArmFromLandmarks(
+    BONE_IDX.LeftUpperArm,
+    BONE_IDX.LeftForeArm,
+    1,
+    P[11],
+    P[13],
+    P[15]
+  );
   {
-    const foreDirL = new THREE.Vector3().subVectors(P[15], P[13]);
-    if (foreDirL.lengthSq() < 1e-8) foreDirL.set(1, 0, 0);
-    foreDirL.normalize();
-
     const handDirL = new THREE.Vector3().addVectors(P[17], P[19]).multiplyScalar(0.5).sub(P[15]);
     if (handDirL.lengthSq() < 1e-8) {
       handDirL.copy(foreDirL);
     } else {
-      handDirL.normalize().lerp(foreDirL, 0.25);
+      handDirL.normalize().lerp(foreDirL, 0.28);
       if (handDirL.lengthSq() < 1e-8) handDirL.copy(foreDirL);
       else handDirL.normalize();
     }
@@ -439,23 +528,24 @@ export function landmarksToHumanoidFrame(worldLm, normLm) {
     mat.makeBasis(handDirL, radialL, zHandL);
     setBoneWorldQuat(BONE_IDX.LeftHand, new THREE.Quaternion().setFromRotationMatrix(mat));
   }
-  void qLFA;
 
   // 4B. Right Arm (12 -> 14 -> 16) + 6-DoF RightHand calibrated to Wuxia Sword radial grip
   bones[BONE_IDX.RightShoulder].quaternion.identity();
   bones[BONE_IDX.RightShoulder].updateWorldMatrix(false, false);
-  const qRUA = alignLimbSegment(BONE_IDX.RightUpperArm, P[12], P[14], restRight, qChestWorld);
-  alignLimbSegment(BONE_IDX.RightForeArm, P[14], P[16], restRight, qRUA);
+  const { foreDir: foreDirR } = solveArmFromLandmarks(
+    BONE_IDX.RightUpperArm,
+    BONE_IDX.RightForeArm,
+    -1,
+    P[12],
+    P[14],
+    P[16]
+  );
   {
-    const foreDirR = new THREE.Vector3().subVectors(P[16], P[14]);
-    if (foreDirR.lengthSq() < 1e-8) foreDirR.set(-1, 0, 0);
-    foreDirR.normalize();
-
     const handDirR = new THREE.Vector3().addVectors(P[18], P[20]).multiplyScalar(0.5).sub(P[16]);
     if (handDirR.lengthSq() < 1e-8) {
       handDirR.copy(foreDirR);
     } else {
-      handDirR.normalize().lerp(foreDirR, 0.25);
+      handDirR.normalize().lerp(foreDirR, 0.28);
       if (handDirR.lengthSq() < 1e-8) handDirR.copy(foreDirR);
       else handDirR.normalize();
     }
@@ -518,46 +608,100 @@ export function landmarksToHumanoidFrame(worldLm, normLm) {
     setBoneWorldQuat(BONE_IDX.RightHand, new THREE.Quaternion().setFromRotationMatrix(mat));
   }
 
-  // 5. Left Leg (23 -> 25 -> 27) & Right Leg (24 -> 26 -> 28) with forward knee plane
+  // 5. Left Leg (23 -> 25 -> 27) & Right Leg (24 -> 26 -> 28)
+  // Singularity-free pelvis-swing + bounded knee-hinge + hyperextension-clamp solver (matches videoPoseSolver.mjs)
   const solveLegFromLandmarks = (upIdx, loIdx, ftIdx, pHip, pKnee, pAnkle, pHeel, pToe) => {
-    const dUpperRaw = new THREE.Vector3().subVectors(pKnee, pHip);
-    const dLowerRaw = new THREE.Vector3().subVectors(pAnkle, pKnee);
-    const footFwd = new THREE.Vector3().subVectors(pToe, pHeel);
-    if (footFwd.lengthSq() < 1e-8) footFwd.copy(vZ);
-    footFwd.normalize();
+    const yUpper = new THREE.Vector3().subVectors(pHip, pKnee);
+    if (yUpper.lengthSq() < 1e-8) yUpper.copy(vY);
+    else yUpper.normalize();
 
-    const buildLegBasis = (downVec) => {
-      const ly = downVec.clone().negate().normalize();
-      const lx = new THREE.Vector3().crossVectors(ly, footFwd);
-      if (lx.lengthSq() < 1e-8) {
-        lx.copy(makePerpUnit(ly, vX));
-      } else {
-        lx.normalize();
-      }
-      const lz = new THREE.Vector3().crossVectors(lx, ly).normalize();
-      mat.makeBasis(lx, ly, lz);
-      return normalizeQuatSafe(new THREE.Quaternion().setFromRotationMatrix(mat));
-    };
+    const dotUp = THREE.MathUtils.clamp(vY.dot(yUpper), -1, 1);
+    let qSwingThigh;
+    if (dotUp < -0.92) {
+      qSwingThigh = new THREE.Quaternion().setFromAxisAngle(vX, -Math.acos(dotUp));
+    } else {
+      qSwingThigh = new THREE.Quaternion().setFromUnitVectors(vY, yUpper);
+    }
+    normalizeQuatSafe(qSwingThigh);
 
-    const qUp =
-      dUpperRaw.lengthSq() > 1e-6
-        ? buildLegBasis(dUpperRaw.clone().normalize())
-        : alignLimbSegment(upIdx, pHip, pKnee, restDown, qHipsWorld);
+    const xBase = vX.clone().applyQuaternion(qSwingThigh);
+    xBase.addScaledVector(yUpper, -xBase.dot(yUpper));
+    if (xBase.lengthSq() < 1e-8) xBase.copy(makePerpUnit(yUpper, vX));
+    else xBase.normalize();
+    const zBase = new THREE.Vector3().crossVectors(xBase, yUpper).normalize();
+
+    // Stabilize monocular heel->toe forward cue against pelvis forward vZ (eliminates flamingo knee flips)
+    const rawFootFwd = new THREE.Vector3().subVectors(pToe, pHeel);
+    const footFwd = vZ.clone();
+    if (rawFootFwd.lengthSq() > 1e-8) {
+      rawFootFwd.normalize();
+      const fwdAgree = THREE.MathUtils.smoothstep(rawFootFwd.dot(vZ), -0.25, 0.35);
+      footFwd.lerp(rawFootFwd, fwdAgree * 0.72);
+      if (footFwd.lengthSq() < 1e-8) footFwd.copy(vZ);
+      else footFwd.normalize();
+    }
+
+    // Subtle bounded hip external/internal rotation from knee-bend + foot plane (never flips >33 deg)
+    const midHipAnkle = new THREE.Vector3().addVectors(pHip, pAnkle).multiplyScalar(0.5);
+    const obsPole = new THREE.Vector3()
+      .subVectors(pKnee, midHipAnkle)
+      .addScaledVector(footFwd, 0.08);
+    obsPole.addScaledVector(yUpper, -obsPole.dot(yUpper));
+    const obsLen = obsPole.length();
+    const zUpper = zBase.clone();
+    if (obsLen > 1e-4) {
+      obsPole.divideScalar(obsLen);
+      const twistW =
+        THREE.MathUtils.smoothstep(obsLen, 0.03, 0.12) *
+        THREE.MathUtils.smoothstep(obsPole.dot(zBase), -0.15, 0.35) *
+        0.52;
+      zUpper.lerp(obsPole, twistW);
+      zUpper.addScaledVector(yUpper, -zUpper.dot(yUpper));
+      if (zUpper.lengthSq() > 1e-8) zUpper.normalize();
+      else zUpper.copy(zBase);
+    }
+    const xUpper = new THREE.Vector3().crossVectors(yUpper, zUpper);
+    if (xUpper.lengthSq() < 1e-8) xUpper.copy(xBase);
+    else xUpper.normalize();
+    zUpper.crossVectors(xUpper, yUpper).normalize();
+    mat.makeBasis(xUpper, yUpper, zUpper);
+    const qUp = normalizeQuatSafe(new THREE.Quaternion().setFromRotationMatrix(mat));
     setBoneWorldQuat(upIdx, qUp);
 
-    const qLo = dLowerRaw.lengthSq() > 1e-6 ? buildLegBasis(dLowerRaw.clone().normalize()) : qUp;
+    // Lower leg shares xUpper knee-hinge axis (zero 180-deg shin twist) with hyperextension clamp
+    const yLower = new THREE.Vector3().subVectors(pKnee, pAnkle);
+    if (yLower.lengthSq() < 1e-8) yLower.copy(yUpper);
+    else yLower.normalize();
+    const hyper = yLower.dot(zUpper);
+    if (hyper < -0.03) {
+      yLower.addScaledVector(zUpper, -hyper - 0.03);
+      if (yLower.lengthSq() < 1e-8) yLower.copy(yUpper);
+      else yLower.normalize();
+    }
+    const xLower = xUpper.clone().addScaledVector(yLower, -xUpper.dot(yLower));
+    if (xLower.lengthSq() < 1e-8) xLower.copy(makePerpUnit(yLower, xUpper));
+    else xLower.normalize();
+    const zLower = new THREE.Vector3().crossVectors(xLower, yLower).normalize();
+    mat.makeBasis(xLower, yLower, zLower);
+    const qLo = normalizeQuatSafe(new THREE.Quaternion().setFromRotationMatrix(mat));
     setBoneWorldQuat(loIdx, qLo);
 
-    const fZ = footFwd.clone();
-    const fX = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), fZ);
-    if (fX.lengthSq() < 1e-8) {
-      fX.copy(makePerpUnit(fZ, vX));
-    } else {
-      fX.normalize();
+    // Foot uses shared ankle hinge axis xLower (avoids world-up cross singularity on steep kicks/splits)
+    const fZ = zLower.clone().lerp(footFwd, 0.55);
+    if (fZ.dot(zLower) < 0.25) {
+      fZ.lerp(zLower, 0.65);
     }
-    const fY = new THREE.Vector3().crossVectors(fZ, fX).normalize();
+    if (fZ.lengthSq() < 1e-8) fZ.copy(zLower);
+    else fZ.normalize();
+    const fY = new THREE.Vector3().crossVectors(fZ, xLower);
+    if (fY.lengthSq() < 1e-8) fY.copy(makePerpUnit(fZ, yLower));
+    else fY.normalize();
+    const fX = new THREE.Vector3().crossVectors(fY, fZ);
+    if (fX.lengthSq() < 1e-8) fX.copy(xLower);
+    else fX.normalize();
+    fY.crossVectors(fZ, fX).normalize();
     mat.makeBasis(fX, fY, fZ);
-    setBoneWorldQuat(ftIdx, new THREE.Quaternion().setFromRotationMatrix(mat));
+    setBoneWorldQuat(ftIdx, normalizeQuatSafe(new THREE.Quaternion().setFromRotationMatrix(mat)));
   };
 
   solveLegFromLandmarks(
@@ -633,8 +777,55 @@ export function landmarksToHumanoidFrame(worldLm, normLm) {
 }
 
 /**
- * Calibrates metric stride scale (pxPerMeter), studio floor line, aerial jump clearance,
- * and subtle depth lunge (rz) across an entire extracted video sequence.
+ * Suppresses isolated 1-frame monocular MediaPipe glitch spikes and aligns quaternion hemisphere signs
+ * across consecutive frames without dulling intentional fast martial arts strikes.
+ */
+export function stabilizeCapturedSequence(frames) {
+  if (!frames || frames.length < 2) return;
+
+  // 1. Enforce shortest-arc quaternion sign continuity
+  for (let i = 1; i < frames.length; i++) {
+    const prev = frames[i - 1].quats;
+    const curr = frames[i].quats;
+    for (let b = 0; b < NUM_BONES; b++) {
+      if (curr[b].dot(prev[b]) < 0) {
+        curr[b].set(-curr[b].x, -curr[b].y, -curr[b].z, -curr[b].w);
+      }
+    }
+  }
+
+  if (frames.length < 3) return;
+
+  // 2. Reject isolated single-frame landmark glitches (V-spike where neighbors agree within 32 deg)
+  const cosNeighborAgree = Math.cos((32 * Math.PI) / 180 / 2);
+  const cosSpikeThresh = Math.cos((46 * Math.PI) / 180 / 2);
+  const qMid = new THREE.Quaternion();
+
+  for (let i = 1; i < frames.length - 1; i++) {
+    const qPrev = frames[i - 1].quats;
+    const qCurr = frames[i].quats;
+    const qNext = frames[i + 1].quats;
+    for (let b = 0; b < NUM_BONES; b++) {
+      const dotPN = Math.abs(qPrev[b].dot(qNext[b]));
+      if (dotPN >= cosNeighborAgree) {
+        const dotPC = Math.abs(qPrev[b].dot(qCurr[b]));
+        const dotCN = Math.abs(qCurr[b].dot(qNext[b]));
+        if (dotPC < cosSpikeThresh && dotCN < cosSpikeThresh) {
+          qMid.copy(qPrev[b]).slerp(qNext[b], 0.5);
+          normalizeQuatSafe(qMid);
+          if (qMid.dot(qPrev[b]) < 0) {
+            qMid.set(-qMid.x, -qMid.y, -qMid.z, -qMid.w);
+          }
+          qCurr[b].copy(qMid);
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Calibrates metric stride scale (pxPerMeter), perspective-aware studio floor line,
+ * genuine aerial jump clearance, and subtle depth lunge (rz) across an extracted sequence.
  */
 export function calibrateVideoSequenceMetrics(frames) {
   if (!frames || frames.length === 0) return;
@@ -668,10 +859,6 @@ export function calibrateVideoSequenceMetrics(frames) {
     0.68
   );
   const pxPerMeter = refLegNorm / 0.82;
-  const groundLineNormY = percentile(
-    validMeta.map((m) => m.lowestAnkleY),
-    0.88
-  );
   const centerHipNormX = percentile(
     validMeta.map((m) => m.hipX),
     0.5
@@ -684,7 +871,21 @@ export function calibrateVideoSequenceMetrics(frames) {
     )
   );
 
-  for (const fr of frames) {
+  // Perspective-aware local sliding-window floor line (±14 frames 88th percentile of lowestAnkleY)
+  // Prevents perspective levitation when performers step deeper into the studio while preserving true jumps.
+  const winHalf = Math.min(14, Math.max(2, Math.floor(frames.length / 4)));
+  const localFloorY = frames.map((_, idx) => {
+    const samples = [];
+    const s0 = Math.max(0, idx - winHalf);
+    const s1 = Math.min(frames.length - 1, idx + winHalf);
+    for (let k = s0; k <= s1; k++) {
+      if (frames[k]._imgMeta) samples.push(frames[k]._imgMeta.lowestAnkleY);
+    }
+    return samples.length > 0 ? percentile(samples, 0.88) : 0.8;
+  });
+
+  for (let i = 0; i < frames.length; i++) {
+    const fr = frames[i];
     bones[0].position.set(0, 0, 0);
     for (let b = 0; b < NUM_BONES; b++) bones[b].quaternion.copy(fr.quats[b]);
     bones[0].updateWorldMatrix(true, true);
@@ -695,13 +896,14 @@ export function calibrateVideoSequenceMetrics(frames) {
     if (fr._imgMeta) {
       const m = fr._imgMeta;
       const rx = THREE.MathUtils.clamp((m.hipX - centerHipNormX) / pxPerMeter, -1.65, 1.65);
-      const airClearance = THREE.MathUtils.clamp(
-        (groundLineNormY - m.lowestAnkleY - 0.015) / pxPerMeter,
-        0,
-        0.85
-      );
+      // Require genuine lift (> 4.5% of image height above local floor line) before granting aerial clearance
+      const rawLift = localFloorY[i] - m.lowestAnkleY;
+      const airClearance =
+        rawLift > 0.045
+          ? THREE.MathUtils.clamp((rawLift - 0.035) / pxPerMeter, 0, 0.85)
+          : 0;
       const ry = 0.08 + airClearance - relMinFootY;
-      const rz = THREE.MathUtils.clamp((m.torsoNorm / medianTorsoNorm - 1.0) * 0.9, -0.4, 0.4);
+      const rz = THREE.MathUtils.clamp((m.torsoNorm / medianTorsoNorm - 1.0) * 0.75, -0.35, 0.35);
       fr.rootPos.set(rx, ry, rz);
     } else {
       fr.rootPos.y = 0.08 - relMinFootY;
@@ -1054,13 +1256,14 @@ export async function extractClipFromVideoSource(source, onProgress, options = {
     const vw = video.videoWidth || 640;
     const vh = video.videoHeight || 360;
     const frameCanvas = document.createElement('canvas');
-    frameCanvas.width = 480;
-    frameCanvas.height = Math.max(240, Math.round((480 * vh) / Math.max(1, vw)));
+    frameCanvas.width = Math.min(640, Math.max(480, vw));
+    frameCanvas.height = Math.max(240, Math.round((frameCanvas.width * vh) / Math.max(1, vw)));
     const frameCtx = frameCanvas.getContext('2d', { willReadFrequently: true });
 
     const frames = [];
     let lastValidFrame = null;
     let leadingMissing = 0;
+    let detectedFrames = 0;
     const clipBaseMs = Math.max(Math.round(performance.now()) + 1000, lastVideoTimestampMs + 1000);
     const safeSpan = Math.max(0.01, Math.min(spanSec, Math.max(0.01, fullDuration - trimIn - 0.008)));
 
@@ -1074,6 +1277,7 @@ export async function extractClipFromVideoSource(source, onProgress, options = {
       const res = landmarker.detectForVideo(frameCanvas, tsMs);
 
       if (res.worldLandmarks && res.worldLandmarks.length > 0) {
+        detectedFrames++;
         const fr = landmarksToHumanoidFrame(res.worldLandmarks[0], res.landmarks?.[0]);
         if (leadingMissing > 0) {
           for (let m = 0; m < leadingMissing; m++) {
@@ -1101,8 +1305,10 @@ export async function extractClipFromVideoSource(source, onProgress, options = {
       throw new Error('视频选定区间中未检测到人体动作，请确保人物全身清晰入镜。');
     }
 
+    stabilizeCapturedSequence(frames);
     calibrateVideoSequenceMetrics(frames);
     alignCapturedSequenceToPlusZ(frames, !Boolean(mergedOpts.nonCyclic ?? true));
+    const detectionRate = totalSamples > 0 ? detectedFrames / totalSamples : 0;
 
     const clipId = mergedOpts.id || mergedOpts.clipId || 'captured_video';
     const clipName = mergedOpts.name || mergedOpts.clipName || mergedOpts.label || '视频捕捉';
@@ -1135,6 +1341,8 @@ export async function extractClipFromVideoSource(source, onProgress, options = {
       fullVideoDuration: fullDuration,
       trimInSec: trimIn,
       trimOutSec: trimOut,
+      detectedFrames,
+      detectionRate,
       ownedObjectUrl: Boolean(ownedObjectUrl),
     };
   } finally {

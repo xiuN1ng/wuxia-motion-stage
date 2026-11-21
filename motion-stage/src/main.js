@@ -874,8 +874,8 @@ async function loadCatalogAssetItem(item) {
       const bvhText = await resp.text();
       if (bvhText.includes('HIERARCHY') && bvhText.includes('MOTION')) {
         const fileName = item.path.split('/').pop() || `${item.id}.bvh`;
-        return loadClipFromBVHText(bvhText, fileName, {
-          id: item.id.replace(/^[bc]_bvh:/, ''),
+        const st = loadClipFromBVHText(bvhText, fileName, {
+          id: item.id.replace(/^(?:clear|[bc])_bvh:/, ''),
           name: item.label,
           cyclic: item.cyclic,
           hasWeapon: item.hasWeapon,
@@ -883,6 +883,40 @@ async function loadCatalogAssetItem(item) {
           preserveRootMotion: item.preserveRootMotion ?? true,
           presetKey: item.id,
         });
+        if (item.sourceVideoUrl) {
+          const mediaUrl = encodeURI(item.sourceVideoUrl);
+          const dur = Math.max(0.5, Number(activeClip?.duration) || 5.0);
+          activeMediaUrl = mediaUrl;
+          activeMediaOwned = false;
+          pipBox.hidden = false;
+          pipLabel.textContent = `${item.label.split(' · ')[0]} · 原片同步对照`;
+          pipImage.hidden = true;
+          pipOverlay.hidden = true;
+          pipVideo.hidden = false;
+          pipVideo.src = mediaUrl;
+          pipVideo.load();
+          state.trimState = {
+            hasVideo: true,
+            sourceKind: 'url',
+            sourceUrl: mediaUrl,
+            sourceUrls: [mediaUrl],
+            sourceFile: null,
+            sourceLabel: item.label,
+            clipId: item.id.replace(/^clear_bvh:/, 'clear_'),
+            hasWeapon: Boolean(item.hasWeapon),
+            isCombatAttack: Boolean(item.isCombatAttack),
+            nonCyclic: !Boolean(item.cyclic),
+            videoDuration: dur,
+            trimInSec: 0,
+            trimOutSec: dur,
+            pendingTrimInSec: 0,
+            pendingTrimOutSec: dur,
+            targetFps: 24,
+            isScrubbingTrim: false,
+          };
+          syncTrimControlsUI();
+        }
+        return st;
       }
     }
 
