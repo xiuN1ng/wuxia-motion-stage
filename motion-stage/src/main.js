@@ -41,6 +41,7 @@ import {
 import { createWorkbenchPanel } from './ui/WorkbenchPanel.js';
 import { createTelemetryHUD } from './ui/TelemetryHUD.js';
 import { createCombatArena } from './combat/CombatArenaApp.js';
+import { createKeyframeStudio } from './keyframe/KeyframeStudioApp.js';
 
 const SPEEDS = [1.0, 0.5, 0.25];
 const SPLIT_OFFSET_X = 0.78;
@@ -319,12 +320,15 @@ const rawPose = {
 // --- DOM Elements ---
 const stageRootEl = document.getElementById('stage-root');
 const combatContainerEl = document.getElementById('combat-arena-container');
+const keyframeContainerEl = document.getElementById('keyframe-studio-container');
 const modeWorkbenchBtn = document.getElementById('btn-mode-workbench');
+const modeKeyframeBtn = document.getElementById('btn-mode-keyframe');
 const modeCombatBtn = document.getElementById('btn-mode-combat');
 
 let combatArena = null;
 let combatMountPromise = null;
 let combatClipsReady = false;
+let keyframeStudio = null;
 
 const scrubberEl = document.getElementById('timeline-scrubber');
 const frameLabelEl = document.getElementById('lbl-frame');
@@ -1045,6 +1049,10 @@ modeWorkbenchBtn?.addEventListener('click', () => {
   setStageMode('workbench');
 });
 
+modeKeyframeBtn?.addEventListener('click', () => {
+  setStageMode('keyframe');
+});
+
 modeCombatBtn?.addEventListener('click', () => {
   setStageMode('combat');
 });
@@ -1550,13 +1558,20 @@ function setWorkbenchActive(active) {
 
 function syncStageModeTabUI(mode) {
   const isCombat = mode === 'combat';
+  const isKeyframe = mode === 'keyframe';
+  const isWorkbench = mode === 'workbench';
   document.body.classList.toggle('mode-combat', isCombat);
+  document.body.classList.toggle('mode-keyframe', isKeyframe);
   if (stageRootEl) {
     stageRootEl.dataset.activeMode = mode;
   }
   if (modeWorkbenchBtn) {
-    modeWorkbenchBtn.classList.toggle('active', !isCombat);
-    modeWorkbenchBtn.setAttribute('aria-selected', String(!isCombat));
+    modeWorkbenchBtn.classList.toggle('active', isWorkbench);
+    modeWorkbenchBtn.setAttribute('aria-selected', String(isWorkbench));
+  }
+  if (modeKeyframeBtn) {
+    modeKeyframeBtn.classList.toggle('active', isKeyframe);
+    modeKeyframeBtn.setAttribute('aria-selected', String(isKeyframe));
   }
   if (modeCombatBtn) {
     modeCombatBtn.classList.toggle('active', isCombat);
@@ -1565,7 +1580,12 @@ function syncStageModeTabUI(mode) {
 }
 
 function setStageMode(requestedMode, options = {}) {
-  const nextMode = requestedMode === 'combat' ? 'combat' : 'workbench';
+  const nextMode =
+    requestedMode === 'combat'
+      ? 'combat'
+      : requestedMode === 'keyframe'
+        ? 'keyframe'
+        : 'workbench';
   const updateHistory = options.updateHistory !== undefined ? Boolean(options.updateHistory) : true;
 
   state.activeMode = nextMode;
@@ -1574,8 +1594,8 @@ function setStageMode(requestedMode, options = {}) {
   if (updateHistory && typeof window !== 'undefined' && window.history?.replaceState) {
     try {
       const url = new URL(window.location.href);
-      if (nextMode === 'combat') {
-        url.searchParams.set('mode', 'combat');
+      if (nextMode === 'combat' || nextMode === 'keyframe') {
+        url.searchParams.set('mode', nextMode);
       } else {
         url.searchParams.delete('mode');
       }
@@ -1587,6 +1607,8 @@ function setStageMode(requestedMode, options = {}) {
 
   if (nextMode === 'combat') {
     setWorkbenchActive(false);
+    if (keyframeStudio) keyframeStudio.setActive(false);
+    if (keyframeContainerEl) keyframeContainerEl.hidden = true;
     if (combatContainerEl) {
       combatContainerEl.hidden = false;
     }
@@ -1619,12 +1641,35 @@ function setStageMode(requestedMode, options = {}) {
         });
       }
     }
+  } else if (nextMode === 'keyframe') {
+    setWorkbenchActive(false);
+    if (combatArena) combatArena.setActive(false);
+    if (combatContainerEl) combatContainerEl.hidden = true;
+    if (keyframeContainerEl) {
+      keyframeContainerEl.hidden = false;
+    }
+    if (!keyframeStudio && keyframeContainerEl) {
+      keyframeStudio = createKeyframeStudio(keyframeContainerEl, {
+        onSendToWorkbench: (bvhText, fileName, clipOpts) => {
+          setStageMode('workbench');
+          loadClipFromBVHText(bvhText, fileName, clipOpts);
+          setPlaying(true);
+        },
+      });
+    }
+    keyframeStudio?.setActive(true);
   } else {
     if (combatArena) {
       combatArena.setActive(false);
     }
     if (combatContainerEl) {
       combatContainerEl.hidden = true;
+    }
+    if (keyframeStudio) {
+      keyframeStudio.setActive(false);
+    }
+    if (keyframeContainerEl) {
+      keyframeContainerEl.hidden = true;
     }
     setWorkbenchActive(true);
   }
@@ -1837,12 +1882,17 @@ function setViewMode(nextMode) {
   return getState();
 }
 
-// --- Boot Default Clip & Start Render Loop (or Combat Arena via ?mode=combat) ---
+// --- Boot Default Clip & Start Render Loop (or Combat / Keyframe Studio via ?mode=...) ---
 const initialModeParam = new URLSearchParams(window.location.search).get('mode');
-const bootMode = initialModeParam === 'combat' ? 'combat' : 'workbench';
-if (bootMode === 'combat') {
+const bootMode =
+  initialModeParam === 'combat'
+    ? 'combat'
+    : initialModeParam === 'keyframe'
+      ? 'keyframe'
+      : 'workbench';
+if (bootMode === 'combat' || bootMode === 'keyframe') {
   state.workbenchActive = false;
-  setStageMode('combat', { updateHistory: false, skipStateSnapshot: true });
+  setStageMode(bootMode, { updateHistory: false, skipStateSnapshot: true });
 } else {
   ensureWorkbenchRenderer();
   loadActiveClip(presets.slash, 'slash');
@@ -1902,6 +1952,10 @@ function releasePageWebGLResources() {
   if (combatArena) {
     combatArena.destroy();
     combatArena = null;
+  }
+  if (keyframeStudio) {
+    keyframeStudio.dispose();
+    keyframeStudio = null;
   }
   if (renderer) {
     renderer.domElement?.addEventListener?.('webglcontextlost', (e) => e.preventDefault(), {

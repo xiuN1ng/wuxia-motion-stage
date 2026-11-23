@@ -847,6 +847,14 @@ export function resolveMotionProvenance(input = {}) {
       upstreamText: clipName || '本地上传实拍媒体',
     };
   }
+  if (originKind === 'keyframe_synth') {
+    return {
+      originGroup: 'ai_extracted',
+      tagShort: '定格AI补帧',
+      badgeLabel: '定格关键帧 · AI智能补帧',
+      upstreamText: clipName || '关键帧定格摆姿 + Squad/IK 智能补帧合成',
+    };
+  }
   if (originKind === 'bvh_upload') {
     return {
       originGroup: 'custom_bvh',

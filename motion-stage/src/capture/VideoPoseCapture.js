@@ -1459,3 +1459,177 @@ export async function extractClipFromVideoUrl(urlOrList, arg1, arg2, arg3) {
     { ...options, hasWeapon }
   );
 }
+
+function captureVideoThumbnailDataUrl(videoEl, thumbW = 192) {
+  const vw = Math.max(1, videoEl.videoWidth || 640);
+  const vh = Math.max(1, videoEl.videoHeight || 360);
+  const thumbCanvas = document.createElement('canvas');
+  thumbCanvas.width = thumbW;
+  thumbCanvas.height = Math.max(90, Math.round((thumbW * vh) / vw));
+  const ctx = thumbCanvas.getContext('2d');
+  ctx.drawImage(videoEl, 0, 0, thumbCanvas.width, thumbCanvas.height);
+  return thumbCanvas.toDataURL('image/jpeg', 0.78);
+}
+
+/**
+ * Extracts a single 3D 29-bone keyframe pose + JPEG thumbnail from the current frame
+ * (or optional `targetTimeSec`) of a mounted HTMLVideoElement.
+ */
+export async function extractPoseFromVideoElement(videoEl, options = {}) {
+  if (!videoEl) throw new Error('未找到视频画面元素');
+  if (
+    options.targetTimeSec !== undefined &&
+    options.targetTimeSec !== null &&
+    Number.isFinite(Number(options.targetTimeSec))
+  ) {
+    await seekVideoSafely(videoEl, Math.max(0, Number(options.targetTimeSec)));
+  }
+
+  const timestampSec = Number(videoEl.currentTime) || 0;
+  const thumbnailDataUrl = captureVideoThumbnailDataUrl(videoEl, 192);
+
+  const landmarker = await ensureLandmarker('IMAGE', options.onStatus, options.delegate || 'auto');
+  const vw = Math.max(1, videoEl.videoWidth || 640);
+  const vh = Math.max(1, videoEl.videoHeight || 360);
+  const inferCanvas = document.createElement('canvas');
+  inferCanvas.width = Math.min(640, Math.max(480, vw));
+  inferCanvas.height = Math.max(240, Math.round((inferCanvas.width * vh) / vw));
+  const inferCtx = inferCanvas.getContext('2d', { willReadFrequently: true });
+  inferCtx.drawImage(videoEl, 0, 0, inferCanvas.width, inferCanvas.height);
+
+  const res = landmarker.detect(inferCanvas);
+  if (!res.worldLandmarks || res.worldLandmarks.length === 0) {
+    return {
+      detected: false,
+      timestampSec,
+      thumbnailDataUrl,
+      rootPos: new THREE.Vector3(0, 0.94, 0),
+      quats: Array.from({ length: NUM_BONES }, () => new THREE.Quaternion()),
+    };
+  }
+
+  const frame = landmarksToHumanoidFrame(res.worldLandmarks[0], res.landmarks?.[0]);
+  const meta = frame._imgMeta;
+  delete frame._imgMeta;
+
+  if (options.alignPlusZ !== false) {
+    alignCapturedSequenceToPlusZ([frame], true);
+  }
+
+  // Snap lowest ankle cleanly to floor unless performer is visibly airborne in image
+  const { bones } = createBoneHierarchy();
+  bones[0].position.copy(frame.rootPos);
+  for (let b = 0; b < NUM_BONES; b++) bones[b].quaternion.copy(frame.quats[b]);
+  bones[0].updateWorldMatrix(true, true);
+  const pL = new THREE.Vector3();
+  const pR = new THREE.Vector3();
+  bones[BONE_IDX.LeftFoot].getWorldPosition(pL);
+  bones[BONE_IDX.RightFoot].getWorldPosition(pR);
+  const minFootY = Math.min(pL.y, pR.y);
+  const isAir = meta && meta.lowestAnkleY < 0.66;
+  const targetFloor = isAir ? 0.24 : 0.08;
+  frame.rootPos.y += targetFloor - minFootY;
+  frame.rootPos.x = THREE.MathUtils.clamp(frame.rootPos.x * 0.45, -0.65, 0.65);
+
+  return {
+    detected: true,
+    timestampSec,
+    thumbnailDataUrl,
+    rootPos: frame.rootPos,
+    quats: frame.quats,
+  };
+}
+
+/**
+ * Scans `[trimInSec, trimOutSec]` on a mounted HTMLVideoElement, solves the metric-calibrated
+ * sequence, and returns `targetCount` salient keyframes with thumbnails and real segment durations.
+ */
+export async function extractSalientKeyframesFromVideoElement(videoEl, options = {}) {
+  if (!videoEl) throw new Error('未找到视频画面元素');
+  const fullDur = Number.isFinite(videoEl.duration) && videoEl.duration > 0 ? videoEl.duration : 4.0;
+  const trimIn = THREE.MathUtils.clamp(Number(options.trimInSec) || 0, 0, Math.max(0, fullDur - 0.1));
+  const trimOut = THREE.MathUtils.clamp(
+    options.trimOutSec !== undefined && options.trimOutSec !== null
+      ? Number(options.trimOutSec)
+      : Math.min(fullDur, trimIn + 6.5),
+    Math.min(fullDur, trimIn + 0.2),
+    fullDur
+  );
+  const targetCount = THREE.MathUtils.clamp(Math.round(Number(options.targetCount) || 5), 3, 9);
+  const sampleFps = THREE.MathUtils.clamp(Math.round(Number(options.sampleFps) || 10), 6, 24);
+  const spanSec = Math.max(0.2, trimOut - trimIn);
+  const totalSamples = Math.max(targetCount, Math.round(spanSec * sampleFps));
+
+  const landmarker = await ensureLandmarker('VIDEO', options.onStatus, options.delegate || 'auto');
+  const vw = Math.max(1, videoEl.videoWidth || 640);
+  const vh = Math.max(1, videoEl.videoHeight || 360);
+  const inferCanvas = document.createElement('canvas');
+  inferCanvas.width = Math.min(640, Math.max(480, vw));
+  inferCanvas.height = Math.max(240, Math.round((inferCanvas.width * vh) / vw));
+  const inferCtx = inferCanvas.getContext('2d', { willReadFrequently: true });
+
+  const frames = [];
+  const sampleTimes = [];
+  let lastValid = null;
+  let leadingMiss = 0;
+  const clipBaseMs = Math.max(Math.round(performance.now()) + 1000, lastVideoTimestampMs + 1000);
+  const safeSpan = Math.max(0.05, Math.min(spanSec, Math.max(0.05, fullDur - trimIn - 0.01)));
+
+  for (let i = 0; i < totalSamples; i++) {
+    const u = totalSamples > 1 ? i / (totalSamples - 1) : 0;
+    const t = THREE.MathUtils.clamp(trimIn + u * safeSpan, 0, Math.max(0, fullDur - 0.008));
+    sampleTimes.push(t);
+    await seekVideoSafely(videoEl, t);
+    inferCtx.drawImage(videoEl, 0, 0, inferCanvas.width, inferCanvas.height);
+
+    const tsMs = advanceMonotonicVideoTimestampMs(t - trimIn, clipBaseMs);
+    const res = landmarker.detectForVideo(inferCanvas, tsMs);
+    if (res.worldLandmarks && res.worldLandmarks.length > 0) {
+      const fr = landmarksToHumanoidFrame(res.worldLandmarks[0], res.landmarks?.[0]);
+      if (leadingMiss > 0) {
+        for (let m = 0; m < leadingMiss; m++) frames.push(cloneRawCapturedFrame(fr));
+        leadingMiss = 0;
+      }
+      lastValid = fr;
+      frames.push(fr);
+    } else if (lastValid) {
+      frames.push(cloneRawCapturedFrame(lastValid));
+    } else {
+      leadingMiss++;
+    }
+    options.onProgress?.(Math.round(((i + 1) / totalSamples) * 100));
+  }
+
+  if (frames.length === 0) {
+    throw new Error('视频区间未检测到清晰全身姿态，请切换更清晰的全身画面片段。');
+  }
+
+  stabilizeCapturedSequence(frames);
+  calibrateVideoSequenceMetrics(frames);
+  alignCapturedSequenceToPlusZ(frames, false);
+
+  // Pick salient indices (endpoints + max turning/inflection poses)
+  const { selectSalientKeyframeIndices } = await import('../keyframe/KeyframeInbetweener.js');
+  const indices = selectSalientKeyframeIndices(frames, targetCount);
+
+  const outKeyframes = [];
+  for (let k = 0; k < indices.length; k++) {
+    const idx = indices[k];
+    const nextIdx = k < indices.length - 1 ? indices[k + 1] : idx;
+    const tSec = sampleTimes[Math.min(sampleTimes.length - 1, idx)] ?? trimIn;
+    const nextSec = sampleTimes[Math.min(sampleTimes.length - 1, nextIdx)] ?? tSec + 0.35;
+    await seekVideoSafely(videoEl, tSec);
+    const thumbnailDataUrl = captureVideoThumbnailDataUrl(videoEl, 192);
+    const srcFr = frames[idx];
+    outKeyframes.push({
+      sourceTimeSec: +tSec.toFixed(2),
+      durationToNext: THREE.MathUtils.clamp(+(nextSec - tSec).toFixed(2) || 0.38, 0.14, 1.8),
+      thumbnailDataUrl,
+      rootPos: srcFr.rootPos.clone(),
+      quats: srcFr.quats.map((q) => q.clone()),
+    });
+  }
+
+  return outKeyframes;
+}
+

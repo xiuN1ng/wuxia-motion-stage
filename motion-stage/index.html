@@ -10,11 +10,13 @@
     />
     <link rel="stylesheet" href="/src/style.css" />
     <link rel="stylesheet" href="/src/combat/combat.css" />
+    <link rel="stylesheet" href="/src/keyframe/keyframe.css" />
   </head>
   <body>
     <main id="stage-root" aria-label="3D 角色动作舞台" data-active-mode="workbench">
       <div id="canvas-container" data-workbench-ui></div>
       <div id="combat-arena-container" class="combat-arena-host" hidden></div>
+      <div id="keyframe-studio-container" class="keyframe-studio-host" hidden></div>
 
       <!-- Top-Left Minimal Motion Source Bar & Unified Stage Switcher -->
       <header id="top-floating-bar" role="banner">
@@ -36,6 +38,16 @@
             data-stage-mode="workbench"
           >
             🛠 动作生产工作台
+          </button>
+          <button
+            type="button"
+            id="btn-mode-keyframe"
+            class="stage-mode-tab"
+            role="tab"
+            aria-selected="false"
+            data-stage-mode="keyframe"
+          >
+            🎬 定格关键帧补帧
           </button>
           <button
             type="button"
