@@ -123,7 +123,7 @@ body.mode-keyframe [data-workbench-ui] {
   top: 64px;
   left: 16px;
   bottom: 156px;
-  width: 292px;
+  width: 296px;
   display: flex;
   flex-direction: column;
   gap: 7px;
@@ -136,6 +136,11 @@ body.mode-keyframe [data-workbench-ui] {
   box-shadow: var(--shadow-float), var(--specular-top);
   overflow-y: auto;
   z-index: 15;
+  transition: width 0.16s ease;
+}
+
+.kf-left-dock.is-wide {
+  width: 440px;
 }
 
 /* Right Dock: Stop-Motion Puppet Bone Inspector & AI In-betweener */
@@ -211,6 +216,7 @@ body.mode-keyframe [data-workbench-ui] {
   height: 100%;
   object-fit: contain;
   display: block;
+  cursor: pointer;
 }
 
 .kf-video-status {
@@ -225,6 +231,16 @@ body.mode-keyframe [data-workbench-ui] {
   font-size: 11.5px;
   color: #5eead4;
   font-weight: 500;
+  pointer-events: none;
+}
+
+.kf-video-status[hidden] {
+  display: none !important;
+}
+
+.kf-video-status.is-error {
+  color: #fca5a5;
+  background: rgba(28, 12, 16, 0.86);
 }
 
 .kf-row {
@@ -239,12 +255,13 @@ body.mode-keyframe [data-workbench-ui] {
   background: var(--surface-hover);
   color: var(--text-primary);
   border-radius: 6px;
-  padding: 5px 8px;
+  padding: 5px 7px;
   font-size: 11.5px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.12s ease;
   text-align: center;
+  white-space: nowrap;
 }
 
 .kf-btn:hover:not(:disabled) {

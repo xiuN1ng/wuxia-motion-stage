@@ -12,6 +12,7 @@ import { sampleInterpolatedFrame } from '../pipeline/MotionCleaner.js';
 import { applyForearmTwistSolver, SpringClothSolver } from '../pipeline/TwoBoneIK.js';
 import { exportFramesToBVH } from '../pipeline/BVHExporter.js';
 import {
+  bindVideoElementWithFallback,
   extractPoseFromVideoElement,
   extractSalientKeyframesFromVideoElement,
 } from '../capture/VideoPoseCapture.js';
@@ -53,6 +54,13 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
   let rafId = 0;
   let lastClock = 0;
   let ownedVideoBlobUrl = null;
+  let fetchedVideoBlobUrl = null;
+  let videoLoadGen = 0;
+  let videoCurrentRawUrl = '';
+  let videoActiveResolvedUrl = '';
+  let videoReady = false;
+  let videoWindowStartSec = 0;
+  let videoWindowEndSec = 0;
 
   const videoAssets = STATIC_ASSET_CATALOG.filter((x) => x.kind === 'video');
   const bvhCompareAssets = STATIC_ASSET_CATALOG.filter(
@@ -65,6 +73,8 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
     gizmoMode: 'rotate', // 'rotate' | 'translate'
     onionSkin: true,
     showArc: true,
+    syncVideoWith3D: true,
+    wideVideo: false,
     playing: false,
     loop: true,
     speedIdx: 0,
@@ -146,7 +156,7 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
       </div>
 
       <!-- Left Dock: Step 1 Video Keyframe Capture & Templates -->
-      <aside class="kf-left-dock" aria-label="视频截取关键帧面板">
+      <aside class="kf-left-dock" id="kf-left-dock" aria-label="视频截取关键帧面板">
         <div class="kf-section">
           <div class="kf-sec-head">
             <span>📦 武侠定格模板快速试玩</span>
@@ -160,9 +170,12 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
 
         <div class="kf-section">
           <div class="kf-sec-head">
-            <span>1. 视频截取关键帧 (MediaPipe)</span>
-            <label class="kf-btn" for="kf-video-file-input" style="padding:2px 6px;font-size:11px;">+ 本地视频</label>
-            <input type="file" id="kf-video-file-input" accept="video/*" hidden />
+            <span>1. 视频截取与原片对比</span>
+            <div style="display:inline-flex;gap:4px;align-items:center;">
+              <button type="button" class="kf-btn" id="kf-vid-wide" style="padding:2px 6px;font-size:11px;" title="放大或恢复原片画幅">🔍 放大</button>
+              <label class="kf-btn" for="kf-video-file-input" style="padding:2px 6px;font-size:11px;">+ 本地视频</label>
+              <input type="file" id="kf-video-file-input" accept="video/*" hidden />
+            </div>
           </div>
           <select id="kf-video-select" class="kf-select" aria-label="参考视频选择">
             ${videoAssets
@@ -176,17 +189,20 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
           </select>
 
           <div class="kf-video-box">
-            <video id="kf-video-el" muted playsinline preload="auto"></video>
-            <div class="kf-video-status" id="kf-video-status" hidden>正在通过 AI 识别骨骼...</div>
+            <video id="kf-video-el" muted playsinline loop preload="auto" title="点击原片可直接播放或暂停"></video>
+            <div class="kf-video-status" id="kf-video-status" hidden>正在加载原片...</div>
           </div>
 
           <div class="kf-row">
             <button type="button" class="kf-btn" id="kf-vid-prev" title="后退1帧 (-0.04s)">◀ -1帧</button>
-            <button type="button" class="kf-btn" id="kf-vid-play" style="flex:1;">播放原片</button>
+            <button type="button" class="kf-btn" id="kf-vid-play" style="flex:1;">▶ 播放原片</button>
             <button type="button" class="kf-btn" id="kf-vid-next" title="前进1帧 (+0.04s)">+1帧 ▶</button>
-            <span class="kf-mono-val" id="kf-vid-time" style="width:52px;">0.00s</span>
+            <button type="button" class="kf-btn active" id="kf-vid-sync" title="开启后播放或拖动 3D 动作时原片自动同步对照">🔗 同步3D</button>
           </div>
-          <input type="range" id="kf-vid-scrub" min="0" max="5" step="0.02" value="0" aria-label="原视频时间轴" />
+          <div class="kf-row">
+            <input type="range" id="kf-vid-scrub" min="0" max="5" step="0.02" value="0" aria-label="原视频时间轴" style="flex:1;" />
+            <span class="kf-mono-val" id="kf-vid-time" style="width:46px;">0.00s</span>
+          </div>
 
           <div class="kf-row">
             <button type="button" class="kf-btn primary" id="kf-btn-grab-add" style="flex:1;">
@@ -371,8 +387,10 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
     dom.rightBanner = q('#kf-right-banner');
     dom.hintToast = q('#kf-hint-toast');
 
+    dom.leftDock = q('#kf-left-dock');
     dom.templateSelect = q('#kf-template-select');
     dom.templateDesc = q('#kf-template-desc');
+    dom.vidWide = q('#kf-vid-wide');
     dom.videoFileInput = q('#kf-video-file-input');
     dom.videoSelect = q('#kf-video-select');
     dom.videoEl = q('#kf-video-el');
@@ -380,6 +398,7 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
     dom.vidPrev = q('#kf-vid-prev');
     dom.vidPlay = q('#kf-vid-play');
     dom.vidNext = q('#kf-vid-next');
+    dom.vidSync = q('#kf-vid-sync');
     dom.vidTime = q('#kf-vid-time');
     dom.vidScrub = q('#kf-vid-scrub');
     dom.btnGrabAdd = q('#kf-btn-grab-add');
@@ -968,10 +987,16 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
       if (kf && mainChar) {
         applyPoseToRig(mainChar, kf.rootPos, kf.quats, 0);
       }
+      if (st.syncVideoWith3D && dom.videoEl && !dom.videoEl.paused) {
+        dom.videoEl.pause();
+      }
     } else if (!st.playing && mode !== 'pose_edit') {
       // Auto-start playback when user clicks a preview/comparison mode tab!
       st.playing = true;
       dom.btnPlayToggle.textContent = '⏸ 暂停播放';
+      syncOriginalVideoTo3D(true);
+    } else {
+      syncOriginalVideoTo3D(true);
     }
 
     updateJointPinPositions();
@@ -1016,6 +1041,48 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
     trailMesh.geometry.setDrawRange(0, (trailHistory.length - 1) * 6);
   }
 
+  function syncOriginalVideoTo3D(forceSeek = false) {
+    if (!st.syncVideoWith3D || st.isExtractingVideo || !dom.videoEl || !videoReady) return;
+    if (st.viewMode === 'pose_edit') return;
+    const v = dom.videoEl;
+    if (v.readyState < 2 || !Number.isFinite(v.duration) || v.duration <= 0.05) return;
+
+    const winStart = videoWindowStartSec;
+    const winEnd = videoWindowEndSec > winStart + 0.1 ? Math.min(v.duration, videoWindowEndSec) : v.duration;
+    const winSpan = Math.max(0.1, winEnd - winStart);
+    const targetSec = THREE.MathUtils.clamp(winStart + st.normalizedTime * winSpan, 0, Math.max(0, v.duration - 0.01));
+
+    if (st.playing) {
+      const clipDur = Math.max(0.2, synthResult?.clip?.duration || winSpan);
+      const speed = SPEEDS[st.speedIdx] || 1.0;
+      const desiredRate = THREE.MathUtils.clamp((winSpan / clipDur) * speed, 0.25, 2.5);
+      if (Math.abs(v.playbackRate - desiredRate) > 0.04) {
+        try {
+          v.playbackRate = desiredRate;
+        } catch {
+          // Ignore unsupported playbackRate
+        }
+      }
+      if (forceSeek || Math.abs((v.currentTime || 0) - targetSec) > 0.18) {
+        try {
+          v.currentTime = targetSec;
+        } catch {
+          // Ignore seek error
+        }
+      }
+      if (v.paused) {
+        v.play().catch(() => {});
+      }
+    } else if (forceSeek) {
+      if (!v.paused) v.pause();
+      try {
+        v.currentTime = targetSec;
+      } catch {
+        // Ignore seek error
+      }
+    }
+  }
+
   function renderFrame(dt) {
     if (!renderer || !scene || !camera || !mainChar) return;
 
@@ -1025,19 +1092,26 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
     if (st.playing && st.viewMode !== 'pose_edit') {
       const dur = Math.max(0.15, synthResult.clip.duration);
       const speed = SPEEDS[st.speedIdx] || 1.0;
+      const prevNorm = st.normalizedTime;
       st.normalizedTime += (dt * speed) / dur;
+      let wrapped = false;
       if (st.normalizedTime >= 1) {
         if (st.loop) {
           st.normalizedTime %= 1;
           trailHistory.length = 0;
+          wrapped = true;
         } else {
           st.normalizedTime = 1;
           st.playing = false;
           dom.btnPlayToggle.textContent = '▶ 播放验证';
+          if (st.syncVideoWith3D && dom.videoEl && !dom.videoEl.paused) {
+            dom.videoEl.pause();
+          }
         }
       }
       dom.timelineScrub.value = String(Math.round(st.normalizedTime * maxIdx));
       updateFrameReadout();
+      syncOriginalVideoTo3D(wrapped || st.normalizedTime < prevNorm);
     }
 
     if (st.viewMode === 'pose_edit' && !st.playing) {
@@ -1091,26 +1165,115 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
     renderFrame(dt);
   }
 
-  function loadVideoSource(url) {
-    if (!dom.videoEl) return;
+  function setVideoStatusOverlay(message, isError = false) {
+    if (!dom.videoStatus) return;
+    if (!message) {
+      dom.videoStatus.hidden = true;
+      dom.videoStatus.classList.remove('is-error');
+      return;
+    }
+    dom.videoStatus.textContent = message;
+    dom.videoStatus.classList.toggle('is-error', Boolean(isError));
+    dom.videoStatus.hidden = false;
+  }
+
+  function syncVideoPlayButtonUI() {
+    if (!dom.vidPlay || !dom.videoEl) return;
+    dom.vidPlay.textContent = dom.videoEl.paused ? '▶ 播放' : '⏸ 暂停';
+  }
+
+  async function loadVideoSource(url) {
+    if (!dom.videoEl || !url) return { ok: false };
+    const gen = ++videoLoadGen;
+    videoCurrentRawUrl = url;
+    videoReady = false;
+    videoActiveResolvedUrl = '';
     dom.videoEl.pause();
-    dom.videoEl.src = url.startsWith('blob:') ? url : encodeURI(url);
-    dom.videoEl.load();
-    dom.vidPlay.textContent = '播放原片';
+    syncVideoPlayButtonUI();
+    setVideoStatusOverlay('正在加载原片 (VP9 WebM / MP4)...', false);
+
+    if (fetchedVideoBlobUrl) {
+      URL.revokeObjectURL(fetchedVideoBlobUrl);
+      fetchedVideoBlobUrl = null;
+    }
+
+    const res = await bindVideoElementWithFallback(dom.videoEl, url, {
+      isStale: () => gen !== videoLoadGen,
+      preferBlob: true,
+      paintFirstFrame: true,
+    });
+
+    if (gen !== videoLoadGen || res.stale) return { ok: false, stale: true };
+
+    if (!res.ok) {
+      videoReady = false;
+      const errMsg = res.error?.message || '浏览器不支持该视频格式';
+      setVideoStatusOverlay(`原片加载失败：${errMsg}（可尝试切换视频或点击「+ 本地视频」）`, true);
+      syncVideoPlayButtonUI();
+      return res;
+    }
+
+    if (res.ownedBlobUrl) {
+      fetchedVideoBlobUrl = res.ownedBlobUrl;
+    }
+    videoReady = true;
+    videoActiveResolvedUrl = res.activeUrl || url;
+    const d = Number.isFinite(res.duration) && res.duration > 0 ? res.duration : 5;
+    const isLongMaster = d > 20;
+    videoWindowStartSec = isLongMaster ? 26.72 : 0;
+    videoWindowEndSec = isLongMaster ? Math.min(d, 31.77) : d;
+
+    dom.vidScrub.max = d.toFixed(2);
+    const curT = dom.videoEl.currentTime || 0;
+    dom.vidScrub.value = String(curT);
+    dom.vidTime.textContent = `${curT.toFixed(2)}s`;
+    setVideoStatusOverlay('');
+    syncVideoPlayButtonUI();
+
+    if (st.syncVideoWith3D && st.viewMode !== 'pose_edit' && st.playing) {
+      syncOriginalVideoTo3D(true);
+    }
+    return res;
+  }
+
+  async function toggleOriginalVideoPlay() {
+    if (!dom.videoEl) return;
+    if (!dom.videoEl.paused) {
+      dom.videoEl.pause();
+      syncVideoPlayButtonUI();
+      return;
+    }
+
+    if (!videoReady || dom.videoEl.readyState < 2) {
+      const targetUrl = videoCurrentRawUrl || dom.videoSelect?.value;
+      if (targetUrl) {
+        const loaded = await loadVideoSource(targetUrl);
+        if (!loaded.ok) return;
+      }
+    }
+
+    try {
+      dom.videoEl.playbackRate = SPEEDS[st.speedIdx] || 1.0;
+      await dom.videoEl.play();
+      setVideoStatusOverlay('');
+      syncVideoPlayButtonUI();
+    } catch (err) {
+      syncVideoPlayButtonUI();
+      setVideoStatusOverlay(`无法播放原片：${err?.message || '请点击重试'}`, true);
+    }
   }
 
   async function grabCurrentVideoFrameAsKeyframe(replaceCurrent = false) {
     if (st.isExtractingVideo || !dom.videoEl) return null;
     st.isExtractingVideo = true;
     dom.videoEl.pause();
-    dom.vidPlay.textContent = '播放原片';
-    dom.videoStatus.hidden = false;
-    dom.videoStatus.textContent = '正在用 MediaPipe 识别当前画面骨骼...';
+    syncVideoPlayButtonUI();
+    setVideoStatusOverlay('正在用 MediaPipe 识别当前画面骨骼...', false);
 
     try {
       const res = await extractPoseFromVideoElement(dom.videoEl, {
         onStatus: (msg) => {
-          dom.videoStatus.textContent = msg;
+          setVideoStatusOverlay(msg, false);
         },
       });
       const basePose = res.detected
@@ -1153,7 +1316,7 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
       }
     } finally {
       st.isExtractingVideo = false;
-      dom.videoStatus.hidden = true;
+      setVideoStatusOverlay('');
     }
   }
 
@@ -1161,9 +1324,8 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
     if (st.isExtractingVideo || !dom.videoEl) return null;
     st.isExtractingVideo = true;
     dom.videoEl.pause();
-    dom.vidPlay.textContent = '播放原片';
-    dom.videoStatus.hidden = false;
-    dom.videoStatus.textContent = '正在扫描视频动作极值帧...';
+    syncVideoPlayButtonUI();
+    setVideoStatusOverlay('正在扫描视频动作极值帧...', false);
 
     try {
       const dur = Number.isFinite(dom.videoEl.duration) && dom.videoEl.duration > 0 ? dom.videoEl.duration : 5.0;
@@ -1176,10 +1338,10 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
         targetCount,
         sampleFps: 10,
         onStatus: (msg) => {
-          dom.videoStatus.textContent = msg;
+          setVideoStatusOverlay(msg, false);
         },
         onProgress: (pct) => {
-          dom.videoStatus.textContent = `AI 扫描提取关键帧 ${pct}%...`;
+          setVideoStatusOverlay(`AI 扫描提取关键帧 ${pct}%...`, false);
         },
       });
 
@@ -1199,7 +1361,7 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
       return st.keyframes;
     } finally {
       st.isExtractingVideo = false;
-      dom.videoStatus.hidden = true;
+      setVideoStatusOverlay('');
     }
   }
 
@@ -1258,6 +1420,21 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
     });
 
     // Video controls
+    dom.vidWide.addEventListener('click', () => {
+      st.wideVideo = !st.wideVideo;
+      dom.leftDock?.classList.toggle('is-wide', st.wideVideo);
+      dom.vidWide.classList.toggle('active', st.wideVideo);
+      dom.vidWide.textContent = st.wideVideo ? '🔍 还原' : '🔍 放大';
+    });
+
+    dom.vidSync.addEventListener('click', () => {
+      st.syncVideoWith3D = !st.syncVideoWith3D;
+      dom.vidSync.classList.toggle('active', st.syncVideoWith3D);
+      if (st.syncVideoWith3D && st.viewMode !== 'pose_edit') {
+        syncOriginalVideoTo3D(true);
+      }
+    });
+
     dom.videoSelect.addEventListener('change', () => {
       if (dom.videoSelect.value) loadVideoSource(dom.videoSelect.value);
     });
@@ -1273,8 +1450,9 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
     dom.videoEl.addEventListener('loadedmetadata', () => {
       const d = Number.isFinite(dom.videoEl.duration) ? dom.videoEl.duration : 5;
       dom.vidScrub.max = d.toFixed(2);
-      dom.vidScrub.value = '0';
-      dom.vidTime.textContent = '0.00s';
+      const t = dom.videoEl.currentTime || 0;
+      dom.vidScrub.value = String(t);
+      dom.vidTime.textContent = `${t.toFixed(2)}s`;
     });
 
     dom.videoEl.addEventListener('timeupdate', () => {
@@ -1283,33 +1461,34 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
       dom.vidTime.textContent = `${t.toFixed(2)}s`;
     });
 
+    dom.videoEl.addEventListener('play', syncVideoPlayButtonUI);
+    dom.videoEl.addEventListener('pause', syncVideoPlayButtonUI);
+    dom.videoEl.addEventListener('ended', syncVideoPlayButtonUI);
+    dom.videoEl.addEventListener('click', () => {
+      toggleOriginalVideoPlay();
+    });
+
     dom.vidScrub.addEventListener('input', () => {
       dom.videoEl.pause();
-      dom.vidPlay.textContent = '播放原片';
+      syncVideoPlayButtonUI();
       dom.videoEl.currentTime = Number(dom.vidScrub.value) || 0;
     });
 
     dom.vidPrev.addEventListener('click', () => {
       dom.videoEl.pause();
-      dom.vidPlay.textContent = '播放原片';
+      syncVideoPlayButtonUI();
       dom.videoEl.currentTime = Math.max(0, (dom.videoEl.currentTime || 0) - 1 / 24);
     });
 
     dom.vidNext.addEventListener('click', () => {
       dom.videoEl.pause();
-      dom.vidPlay.textContent = '播放原片';
+      syncVideoPlayButtonUI();
       const maxT = Number.isFinite(dom.videoEl.duration) ? dom.videoEl.duration - 0.01 : 10;
       dom.videoEl.currentTime = Math.min(maxT, (dom.videoEl.currentTime || 0) + 1 / 24);
     });
 
     dom.vidPlay.addEventListener('click', () => {
-      if (dom.videoEl.paused) {
-        dom.videoEl.play().catch(() => {});
-        dom.vidPlay.textContent = '暂停原片';
-      } else {
-        dom.videoEl.pause();
-        dom.vidPlay.textContent = '播放原片';
-      }
+      toggleOriginalVideoPlay();
     });
 
     dom.btnGrabAdd.addEventListener('click', () => grabCurrentVideoFrameAsKeyframe(false));
@@ -1497,6 +1676,7 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
         dom.btnPlayToggle.textContent = '▶ 播放验证';
       }
       renderFrame(1 / 60);
+      syncOriginalVideoTo3D(true);
       updateFrameReadout();
     });
 
@@ -1532,6 +1712,13 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
       st.playing = next;
     }
     dom.btnPlayToggle.textContent = st.playing ? '⏸ 暂停播放' : '▶ 播放验证';
+    if (st.syncVideoWith3D && st.viewMode !== 'pose_edit') {
+      if (st.playing) {
+        syncOriginalVideoTo3D(true);
+      } else if (dom.videoEl && !dom.videoEl.paused) {
+        dom.videoEl.pause();
+      }
+    }
     updateJointPinPositions();
     syncGizmoAttachment();
     updateOnionSkins();
@@ -1633,6 +1820,10 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
       URL.revokeObjectURL(ownedVideoBlobUrl);
       ownedVideoBlobUrl = null;
     }
+    if (fetchedVideoBlobUrl) {
+      URL.revokeObjectURL(fetchedVideoBlobUrl);
+      fetchedVideoBlobUrl = null;
+    }
     transformControls?.dispose?.();
     orbitControls?.dispose?.();
     renderer?.dispose?.();
@@ -1647,6 +1838,14 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
       viewMode: st.viewMode,
       gizmoMode: st.gizmoMode,
       playing: st.playing,
+      syncVideoWith3D: st.syncVideoWith3D,
+      videoReady,
+      videoActiveUrl: videoActiveResolvedUrl,
+      videoWidth: dom.videoEl?.videoWidth || 0,
+      videoHeight: dom.videoEl?.videoHeight || 0,
+      videoDuration: Number.isFinite(dom.videoEl?.duration) ? dom.videoEl.duration : 0,
+      videoPaused: Boolean(dom.videoEl?.paused ?? true),
+      videoCurrentTime: dom.videoEl?.currentTime || 0,
       activeKfIdx: st.activeKfIdx,
       keyframeCount: st.keyframes.length,
       selectedBoneIdx: st.selectedBoneIdx,

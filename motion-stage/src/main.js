@@ -26,6 +26,7 @@ import {
 import { applyForearmTwistSolver, SpringClothSolver } from './pipeline/TwoBoneIK.js';
 import { exportCleanedClipToBVH } from './pipeline/BVHExporter.js';
 import {
+  bindVideoElementWithFallback,
   probeVideoSource,
   extractClipFromImageFile,
   extractClipFromVideoFile,
@@ -890,6 +891,7 @@ async function loadCatalogAssetItem(item) {
         if (item.sourceVideoUrl) {
           const mediaUrl = encodeURI(item.sourceVideoUrl);
           const dur = Math.max(0.5, Number(activeClip?.duration) || 5.0);
+          clearMediaPreview();
           activeMediaUrl = mediaUrl;
           activeMediaOwned = false;
           pipBox.hidden = false;
@@ -897,8 +899,18 @@ async function loadCatalogAssetItem(item) {
           pipImage.hidden = true;
           pipOverlay.hidden = true;
           pipVideo.hidden = false;
-          pipVideo.src = mediaUrl;
-          pipVideo.load();
+          bindVideoElementWithFallback(pipVideo, mediaUrl, {
+            preferBlob: true,
+            paintFirstFrame: true,
+          }).then((bindRes) => {
+            if (bindRes?.ok && bindRes.ownedBlobUrl) {
+              if (activeMediaOwned && activeMediaUrl && activeMediaUrl !== bindRes.ownedBlobUrl) {
+                URL.revokeObjectURL(activeMediaUrl);
+              }
+              activeMediaUrl = bindRes.ownedBlobUrl;
+              activeMediaOwned = true;
+            }
+          });
           state.trimState = {
             hasVideo: true,
             sourceKind: 'url',

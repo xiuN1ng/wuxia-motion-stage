@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 
@@ -8,6 +9,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, '..');
 const BVH_LIB_DIR = path.resolve(WORKSPACE_ROOT, 'bvh_library');
 const REF_VIDEOS_DIR = path.resolve(WORKSPACE_ROOT, 'reference_videos');
+const PUBLIC_WEBM_DIR = path.resolve(__dirname, 'public/demo/webm');
+const TMP_WEBM_CACHE_DIR = '/tmp/wuxia_video_webm_cache';
 
 const MIME_BY_EXT = {
   '.bvh': 'text/plain; charset=utf-8',
@@ -189,6 +192,216 @@ export function createStaticRangeMiddleware(mounts) {
   };
 }
 
+function serveBinaryFileWithRange(req, res, fullPath, contentType) {
+  let stat;
+  try {
+    stat = fs.statSync(fullPath);
+  } catch {
+    res.statusCode = 404;
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.end('Not Found');
+    return;
+  }
+  if (!stat.isFile()) {
+    res.statusCode = 404;
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.end('Not Found');
+    return;
+  }
+
+  const total = stat.size;
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Content-Type', contentType);
+  res.setHeader('Cache-Control', 'public, max-age=300');
+
+  const rangeHeader = req.headers?.range;
+  if (rangeHeader) {
+    const m = /^bytes=(\d*)-(\d*)$/.exec(String(rangeHeader).trim());
+    if (!m || total === 0 || (m[1] === '' && m[2] === '')) {
+      res.statusCode = 416;
+      res.setHeader('Content-Range', `bytes */${total}`);
+      res.end();
+      return;
+    }
+    let start;
+    let end;
+    if (m[1] === '') {
+      const suffixLen = Number.parseInt(m[2], 10);
+      start = Math.max(0, total - suffixLen);
+      end = total - 1;
+    } else {
+      start = Number.parseInt(m[1], 10);
+      end = m[2] !== '' ? Math.min(total - 1, Number.parseInt(m[2], 10)) : total - 1;
+    }
+    if (Number.isNaN(start) || Number.isNaN(end) || start < 0 || start > end || start >= total) {
+      res.statusCode = 416;
+      res.setHeader('Content-Range', `bytes */${total}`);
+      res.end();
+      return;
+    }
+    res.statusCode = 206;
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`);
+    res.setHeader('Content-Length', String(end - start + 1));
+    if (req.method === 'HEAD') {
+      res.end();
+      return;
+    }
+    const stream = fs.createReadStream(fullPath, { start, end });
+    req.on?.('close', () => stream.destroy());
+    stream.on('error', () => {
+      if (!res.headersSent) res.statusCode = 500;
+      res.destroy?.();
+    });
+    stream.pipe(res);
+    return;
+  }
+
+  res.statusCode = 200;
+  res.setHeader('Content-Length', String(total));
+  if (req.method === 'HEAD') {
+    res.end();
+    return;
+  }
+  const stream = fs.createReadStream(fullPath);
+  req.on?.('close', () => stream.destroy());
+  stream.on('error', () => {
+    if (!res.headersSent) res.statusCode = 500;
+    res.destroy?.();
+  });
+  stream.pipe(res);
+}
+
+function findReferenceVideoByKey(key) {
+  if (!fs.existsSync(REF_VIDEOS_DIR)) return null;
+  const prefix = `${key}_`;
+  const files = fs.readdirSync(REF_VIDEOS_DIR);
+  const match = files.find((f) => f.startsWith(prefix) && f.toLowerCase().endsWith('.mp4'));
+  return match ? path.join(REF_VIDEOS_DIR, match) : null;
+}
+
+export function createCompatVideoMiddleware() {
+  const inFlight = new Map();
+
+  function ensureTranscodedWebm(key, srcMp4Path) {
+    const outPath = path.join(TMP_WEBM_CACHE_DIR, `${key}.webm`);
+    if (fs.existsSync(outPath) && fs.statSync(outPath).size > 1024) {
+      return Promise.resolve(outPath);
+    }
+    if (inFlight.has(key)) return inFlight.get(key);
+
+    const job = new Promise((resolve, reject) => {
+      fs.mkdirSync(TMP_WEBM_CACHE_DIR, { recursive: true });
+      const tmpPath = `${outPath}.part.${process.pid}.${Date.now()}.webm`;
+      const maxWidth = key === '05' ? 640 : 960;
+      const args = [
+        '-y',
+        '-v',
+        'error',
+        '-i',
+        srcMp4Path,
+        '-vf',
+        `scale='min(${maxWidth},iw)':-2`,
+        '-c:v',
+        'libvpx-vp9',
+        '-pix_fmt',
+        'yuv420p',
+        '-crf',
+        '33',
+        '-b:v',
+        '0',
+        '-deadline',
+        'realtime',
+        '-cpu-used',
+        '6',
+        '-row-mt',
+        '1',
+        '-g',
+        '24',
+        '-an',
+        tmpPath,
+      ];
+      const proc = spawn('ffmpeg', args, { stdio: 'ignore' });
+      proc.on('error', (err) => {
+        try {
+          fs.rmSync(tmpPath, { force: true });
+        } catch {}
+        reject(err);
+      });
+      proc.on('close', (code) => {
+        if (code === 0 && fs.existsSync(tmpPath) && fs.statSync(tmpPath).size > 1024) {
+          fs.renameSync(tmpPath, outPath);
+          resolve(outPath);
+        } else {
+          try {
+            fs.rmSync(tmpPath, { force: true });
+          } catch {}
+          reject(new Error(`ffmpeg exited with code ${code}`));
+        }
+      });
+    }).finally(() => {
+      inFlight.delete(key);
+    });
+
+    inFlight.set(key, job);
+    return job;
+  }
+
+  return (req, res, next) => {
+    if (!req.url || (req.method !== 'GET' && req.method !== 'HEAD')) return next();
+    const rawPathname = req.url.split('?')[0].split('#')[0];
+    const m = /^\/video_compat\/([0-9a-zA-Z_-]+)\.(webm|mp4)$/.exec(rawPathname);
+    if (!m) return next();
+
+    const key = m[1];
+    const ext = m[2];
+    const srcMp4 = findReferenceVideoByKey(key);
+
+    if (ext === 'mp4') {
+      if (!srcMp4) {
+        res.statusCode = 404;
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.end('Not Found');
+        return;
+      }
+      serveBinaryFileWithRange(req, res, srcMp4, 'video/mp4');
+      return;
+    }
+
+    // ext === 'webm': check bundled CC public/demo/webm first, then /tmp cache, then on-demand ffmpeg
+    const bundledWebm = path.join(PUBLIC_WEBM_DIR, `${key}.webm`);
+    if (fs.existsSync(bundledWebm) && fs.statSync(bundledWebm).size > 1024) {
+      serveBinaryFileWithRange(req, res, bundledWebm, 'video/webm');
+      return;
+    }
+    const cachedWebm = path.join(TMP_WEBM_CACHE_DIR, `${key}.webm`);
+    if (fs.existsSync(cachedWebm) && fs.statSync(cachedWebm).size > 1024) {
+      serveBinaryFileWithRange(req, res, cachedWebm, 'video/webm');
+      return;
+    }
+    if (!srcMp4) {
+      res.statusCode = 404;
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.end('Not Found');
+      return;
+    }
+
+    ensureTranscodedWebm(key, srcMp4)
+      .then((webmPath) => {
+        if (!res.writableEnded) {
+          serveBinaryFileWithRange(req, res, webmPath, 'video/webm');
+        }
+      })
+      .catch(() => {
+        if (!res.writableEnded) {
+          res.statusCode = 500;
+          res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+          res.end('WebM transcode failed');
+        }
+      });
+  };
+}
+
 export function wuxiaWorkspaceAssetsPlugin() {
   let resolvedConfig = null;
   const mounts = [
@@ -216,9 +429,11 @@ export function wuxiaWorkspaceAssetsPlugin() {
       resolvedConfig = cfg;
     },
     configureServer(server) {
+      server.middlewares.use(createCompatVideoMiddleware());
       server.middlewares.use(createStaticRangeMiddleware(mounts));
     },
     configurePreviewServer(server) {
+      server.middlewares.use(createCompatVideoMiddleware());
       server.middlewares.use(createStaticRangeMiddleware(mounts));
     },
     closeBundle() {

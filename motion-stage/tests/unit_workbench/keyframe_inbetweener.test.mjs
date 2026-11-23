@@ -127,3 +127,33 @@ test('KeyframeInbetweener: puppet bone Euler editing, L/R mirroring, floor snap,
   assert.equal(prov.originGroup, 'ai_extracted');
   assert.equal(prov.tagShort, '定格AI补帧');
 });
+
+test('Video compat resolver maps Chinese /reference_videos/*.mp4 to pure-ASCII VP9 WebM + MP4 fallbacks', async () => {
+  const { resolveCompatVideoCandidates } = await import('../../src/capture/VideoPoseCapture.js');
+
+  const webmFirst02 = resolveCompatVideoCandidates(
+    '/reference_videos/02_太白无痕剑意_世界冠军李昕豫_独立提膝云剑_720p.mp4',
+    { preferWebm: true }
+  );
+  assert.equal(webmFirst02[0], '/demo/webm/02.webm');
+  assert.equal(webmFirst02[1], '/video_compat/02.webm');
+  assert.equal(webmFirst02[2], '/video_compat/02.mp4');
+
+  const webmFirst01b = resolveCompatVideoCandidates(
+    '/reference_videos/01b_天刀官网_太白崖顶拔剑定势_全身镜头.mp4',
+    { preferWebm: true }
+  );
+  assert.equal(webmFirst01b[0], '/video_compat/01b.webm');
+  assert.equal(webmFirst01b[1], '/video_compat/01b.mp4');
+
+  const mp4First06 = resolveCompatVideoCandidates(
+    '/reference_videos/06_清晰实拍_回旋高踢破防_720p_CC-BY-2.0.mp4',
+    { preferWebm: false }
+  );
+  assert.equal(mp4First06[0], '/video_compat/06.mp4');
+  assert.ok(mp4First06.includes('/demo/webm/06.webm'));
+
+  const blobPassthrough = resolveCompatVideoCandidates('blob:http://localhost:5173/abc-123');
+  assert.deepEqual(blobPassthrough, ['blob:http://localhost:5173/abc-123']);
+});
+

@@ -1025,6 +1025,246 @@ export async function extractClipFromImageFile(file, onStatus, options = {}) {
   };
 }
 
+const BUNDLED_WEBM_KEYS = new Set(['02', '03', '04', '06', '07', '08', '09']);
+
+function safeDecodeUri(s) {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
+export function detectBrowserPrefersWebm(videoEl = null) {
+  try {
+    const v =
+      videoEl ||
+      (typeof document !== 'undefined' && typeof document.createElement === 'function'
+        ? document.createElement('video')
+        : null);
+    if (!v || typeof v.canPlayType !== 'function') return true;
+    const canVp9 = Boolean(v.canPlayType('video/webm; codecs="vp9"'));
+    const canWebm = Boolean(v.canPlayType('video/webm'));
+    return canVp9 || canWebm;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Maps workspace `/reference_videos/<key>_*.mp4` URLs to an ordered list of
+ * pure-ASCII, open-codec VP9 `.webm` and `.mp4` candidates so playback works
+ * identically in open-source Chromium/Electron Preview (no proprietary H.264),
+ * Chrome, Edge, Firefox, Safari, and reverse-proxied environments.
+ */
+export function resolveCompatVideoCandidates(rawUrlOrList, options = {}) {
+  const inputList = Array.isArray(rawUrlOrList) ? rawUrlOrList : [rawUrlOrList];
+  const preferWebm =
+    options.preferWebm !== undefined ? Boolean(options.preferWebm) : detectBrowserPrefersWebm(options.videoEl);
+  const out = [];
+  const seen = new Set();
+  const pushUnique = (u) => {
+    if (!u || seen.has(u)) return;
+    seen.add(u);
+    out.push(u);
+  };
+
+  for (const item of inputList) {
+    const raw = String(item || '').trim();
+    if (!raw) continue;
+    if (raw.startsWith('blob:') || raw.startsWith('data:')) {
+      pushUnique(raw);
+      continue;
+    }
+
+    const decoded = safeDecodeUri(raw);
+    const refMatch = /(?:^|\/)reference_videos\/([0-9a-zA-Z]+)_[^/]+\.mp4(?:[?#].*)?$/i.exec(decoded);
+    if (refMatch) {
+      const key = refMatch[1];
+      const encodedOrig = raw.includes('%') ? raw : encodeURI(raw);
+      const webmUrls = BUNDLED_WEBM_KEYS.has(key)
+        ? [`/demo/webm/${key}.webm`, `/video_compat/${key}.webm`]
+        : [`/video_compat/${key}.webm`];
+      const mp4Urls = [`/video_compat/${key}.mp4`, encodedOrig];
+
+      if (preferWebm) {
+        webmUrls.forEach(pushUnique);
+        mp4Urls.forEach(pushUnique);
+      } else {
+        mp4Urls.forEach(pushUnique);
+        webmUrls.forEach(pushUnique);
+      }
+      continue;
+    }
+
+    pushUnique(raw.includes('%') ? raw : encodeURI(raw));
+  }
+
+  return out;
+}
+
+function waitVideoElementReady(video, timeoutMs = 6500) {
+  if (video.readyState >= 2 && video.videoWidth > 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      video.removeEventListener('loadeddata', onReady);
+      video.removeEventListener('canplay', onReady);
+      video.removeEventListener('error', onError);
+    };
+    const onReady = () => {
+      if (settled) return;
+      if (video.readyState >= 2 && video.videoWidth > 0) {
+        settled = true;
+        cleanup();
+        resolve();
+      }
+    };
+    const onError = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      const code = video.error?.code || 'unknown';
+      reject(new Error(`视频解码失败 (code=${code})`));
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (video.readyState >= 2 && video.videoWidth > 0) {
+        resolve();
+      } else {
+        reject(new Error('视频加载超时'));
+      }
+    }, timeoutMs);
+
+    video.addEventListener('loadeddata', onReady);
+    video.addEventListener('canplay', onReady);
+    video.addEventListener('error', onError);
+  });
+}
+
+/**
+ * Resiliently binds a video URL (or candidate list) to an existing `<video>` element.
+ * Uses pure-ASCII VP9 WebM first and loads short clips into an in-memory `blob:` URL
+ * via `fetch()` so playback & frame-stepping work reliably even behind remote proxies
+ * or inside Electron/Chromium previews without H.264 decoders.
+ */
+export async function bindVideoElementWithFallback(videoEl, rawUrlOrList, options = {}) {
+  const candidates = resolveCompatVideoCandidates(rawUrlOrList, {
+    videoEl,
+    preferWebm: options.preferWebm,
+  });
+  const isStale = typeof options.isStale === 'function' ? options.isStale : () => false;
+  const preferBlob = options.preferBlob !== false;
+  let lastErr = null;
+
+  videoEl.muted = true;
+  videoEl.playsInline = true;
+  videoEl.preload = 'auto';
+
+  for (const rawCandidate of candidates) {
+    if (isStale()) return { ok: false, stale: true };
+    const resolvedUrl = resolveMediaUrl(rawCandidate);
+    const isLocalBlob = resolvedUrl.startsWith('blob:') || resolvedUrl.startsWith('data:');
+    const isLargeReel = /\/05\.(webm|mp4)(\?|$)|05_/.test(resolvedUrl);
+
+    // Strategy 1: Fetch short clips into an in-memory Blob URL (immune to proxy Range/206 quirks)
+    if (preferBlob && !isLocalBlob && !isLargeReel && typeof fetch === 'function') {
+      let blobUrl = null;
+      try {
+        const resp = await fetch(resolvedUrl);
+        if (isStale()) return { ok: false, stale: true };
+        const ct = String(resp.headers?.get?.('content-type') || '');
+        if (!resp.ok || /text\/html/i.test(ct)) {
+          throw new Error(`HTTP ${resp.status} (${ct || 'unknown'})`);
+        }
+        const buf = await resp.arrayBuffer();
+        if (isStale()) return { ok: false, stale: true };
+        if (buf.byteLength < 1024) {
+          throw new Error(`视频体过小 (${buf.byteLength}B)`);
+        }
+        const mime = /\.webm(\?|$)/i.test(resolvedUrl) ? 'video/webm' : 'video/mp4';
+        blobUrl = URL.createObjectURL(new Blob([buf], { type: mime }));
+        videoEl.pause();
+        videoEl.src = blobUrl;
+        videoEl.load();
+        await waitVideoElementReady(videoEl, 6500);
+        if (isStale()) {
+          URL.revokeObjectURL(blobUrl);
+          return { ok: false, stale: true };
+        }
+        if (options.paintFirstFrame !== false && videoEl.duration > 0.08 && videoEl.currentTime === 0) {
+          try {
+            videoEl.currentTime = 0.04;
+          } catch {
+            // Ignore seek failure
+          }
+        }
+        return {
+          ok: true,
+          activeUrl: resolvedUrl,
+          mediaUrl: blobUrl,
+          ownedBlobUrl: blobUrl,
+          duration: Number.isFinite(videoEl.duration) ? videoEl.duration : 0,
+          videoWidth: videoEl.videoWidth || 0,
+          videoHeight: videoEl.videoHeight || 0,
+        };
+      } catch (err) {
+        if (blobUrl) URL.revokeObjectURL(blobUrl);
+        lastErr = err;
+        // If fetch failed due to CORS/network, still try direct <video src> below for this candidate
+      }
+    }
+
+    // Strategy 2: Direct streaming <video src="...">
+    try {
+      if (isStale()) return { ok: false, stale: true };
+      videoEl.pause();
+      if (
+        /^https?:\/\//i.test(resolvedUrl) &&
+        typeof window !== 'undefined' &&
+        !resolvedUrl.startsWith(window.location.origin)
+      ) {
+        videoEl.crossOrigin = 'anonymous';
+      } else {
+        videoEl.removeAttribute('crossorigin');
+      }
+      videoEl.src = resolvedUrl;
+      videoEl.load();
+      await waitVideoElementReady(videoEl, isLargeReel ? 12000 : 7500);
+      if (isStale()) return { ok: false, stale: true };
+      if (options.paintFirstFrame !== false && videoEl.duration > 0.08 && videoEl.currentTime === 0) {
+        try {
+          videoEl.currentTime = 0.04;
+        } catch {
+          // Ignore seek failure
+        }
+      }
+      return {
+        ok: true,
+        activeUrl: resolvedUrl,
+        mediaUrl: resolvedUrl,
+        ownedBlobUrl: null,
+        duration: Number.isFinite(videoEl.duration) ? videoEl.duration : 0,
+        videoWidth: videoEl.videoWidth || 0,
+        videoHeight: videoEl.videoHeight || 0,
+      };
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+
+  return {
+    ok: false,
+    stale: false,
+    error: lastErr || new Error('视频加载失败，请尝试切换片源或上传本地 WebM/MP4 视频。'),
+  };
+}
+
 function resolveMediaUrl(rawUrl) {
   const s = String(rawUrl || '');
   if (s.startsWith('blob:') || s.startsWith('data:')) return s;
@@ -1046,8 +1286,16 @@ function releaseVideoElement(video) {
 }
 
 async function loadReadyVideoElement(candidateUrls, ownedObjectUrl) {
+  const compatUrls = resolveCompatVideoCandidates(candidateUrls);
+  const expandedUrls = [];
+  const seen = new Set();
+  for (const u of [...candidateUrls, ...compatUrls]) {
+    if (!u || seen.has(u)) continue;
+    seen.add(u);
+    expandedUrls.push(u);
+  }
   let lastErr = null;
-  for (const rawUrl of candidateUrls) {
+  for (const rawUrl of expandedUrls) {
     const resolvedUrl = resolveMediaUrl(rawUrl);
     const video = document.createElement('video');
     video.muted = true;
@@ -1062,27 +1310,9 @@ async function loadReadyVideoElement(candidateUrls, ownedObjectUrl) {
     }
 
     try {
-      await new Promise((resolve, reject) => {
-        const onReady = () => {
-          cleanup();
-          resolve();
-        };
-        const onError = () => {
-          cleanup();
-          const code = video.error?.code || 'unknown';
-          reject(new Error(`视频解码失败 (code=${code})，请使用 MP4 或 WebM 格式。`));
-        };
-        const cleanup = () => {
-          video.removeEventListener('loadeddata', onReady);
-          video.removeEventListener('canplay', onReady);
-          video.removeEventListener('error', onError);
-        };
-        video.addEventListener('loadeddata', onReady);
-        video.addEventListener('canplay', onReady);
-        video.addEventListener('error', onError);
-        video.src = resolvedUrl;
-        video.load();
-      });
+      video.src = resolvedUrl;
+      video.load();
+      await waitVideoElementReady(video, 10000);
       return { video, activeUrl: resolvedUrl };
     } catch (err) {
       releaseVideoElement(video);
