@@ -135,9 +135,8 @@ test('Video compat resolver maps Chinese /reference_videos/*.mp4 to pure-ASCII V
     '/reference_videos/02_太白无痕剑意_世界冠军李昕豫_独立提膝云剑_720p.mp4',
     { preferWebm: true }
   );
-  assert.equal(webmFirst02[0], '/demo/webm/02.webm');
-  assert.equal(webmFirst02[1], '/video_compat/02.webm');
-  assert.equal(webmFirst02[2], '/video_compat/02.mp4');
+  assert.equal(webmFirst02[0], '/video_compat/02.webm');
+  assert.equal(webmFirst02[1], '/video_compat/02.mp4');
 
   const webmFirst01b = resolveCompatVideoCandidates(
     '/reference_videos/01b_天刀官网_太白崖顶拔剑定势_全身镜头.mp4',
@@ -151,9 +150,22 @@ test('Video compat resolver maps Chinese /reference_videos/*.mp4 to pure-ASCII V
     { preferWebm: false }
   );
   assert.equal(mp4First06[0], '/video_compat/06.mp4');
-  assert.ok(mp4First06.includes('/demo/webm/06.webm'));
+  assert.ok(mp4First06.includes('/video_compat/06.webm'));
 
   const blobPassthrough = resolveCompatVideoCandidates('blob:http://localhost:5173/abc-123');
   assert.deepEqual(blobPassthrough, ['blob:http://localhost:5173/abc-123']);
+
+  const { resolveSpritePreviewUrls } = await import('../../src/capture/VideoPoseCapture.js');
+  const sp03 = resolveSpritePreviewUrls('/reference_videos/03_太白雨落云飞_北京武术队_快剑五连斩单人实拍_720p.mp4');
+  assert.equal(sp03.key, '03');
+  assert.equal(sp03.imgUrl, '/demo/sprites/03.jpg');
+  assert.equal(sp03.metaUrl, '/demo/sprites/03.json');
+
+  const sp01b = resolveSpritePreviewUrls('/reference_videos/01b_天刀官网_太白崖顶拔剑定势_全身镜头.mp4');
+  assert.equal(sp01b.key, '01b');
+  assert.equal(sp01b.imgUrl, '/video_compat/01b.jpg');
+  assert.equal(sp01b.metaUrl, '/video_compat/01b.json');
+
+  assert.equal(resolveSpritePreviewUrls('blob:http://localhost:5173/local'), null);
 });
 

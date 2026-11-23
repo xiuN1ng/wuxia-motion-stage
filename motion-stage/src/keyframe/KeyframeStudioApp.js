@@ -13,6 +13,8 @@ import { applyForearmTwistSolver, SpringClothSolver } from '../pipeline/TwoBoneI
 import { exportFramesToBVH } from '../pipeline/BVHExporter.js';
 import {
   bindVideoElementWithFallback,
+  resolveSpritePreviewUrls,
+  loadSpriteFilmstrip,
   extractPoseFromVideoElement,
   extractSalientKeyframesFromVideoElement,
 } from '../capture/VideoPoseCapture.js';
@@ -61,6 +63,12 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
   let videoReady = false;
   let videoWindowStartSec = 0;
   let videoWindowEndSec = 0;
+  let mediaMode = 'sprite'; // 'sprite' | 'video'
+  let activeSprite = null;
+  let spriteTimeSec = 0;
+  let spritePlaying = false;
+  let lastDrawnSpriteIdx = -1;
+  let videoCanvasCtx = null;
 
   const videoAssets = STATIC_ASSET_CATALOG.filter((x) => x.kind === 'video');
   const bvhCompareAssets = STATIC_ASSET_CATALOG.filter(
@@ -170,10 +178,10 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
 
         <div class="kf-section">
           <div class="kf-sec-head">
-            <span>1. 视频截取与原片对比</span>
+            <span style="white-space:nowrap;">1. 原片对照与抓帧</span>
             <div style="display:inline-flex;gap:4px;align-items:center;">
               <button type="button" class="kf-btn" id="kf-vid-wide" style="padding:2px 6px;font-size:11px;" title="放大或恢复原片画幅">🔍 放大</button>
-              <label class="kf-btn" for="kf-video-file-input" style="padding:2px 6px;font-size:11px;">+ 本地视频</label>
+              <label class="kf-btn" for="kf-video-file-input" style="padding:2px 6px;font-size:11px;">+ 视频</label>
               <input type="file" id="kf-video-file-input" accept="video/*" hidden />
             </div>
           </div>
@@ -189,15 +197,16 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
           </select>
 
           <div class="kf-video-box">
-            <video id="kf-video-el" muted playsinline loop preload="auto" title="点击原片可直接播放或暂停"></video>
+            <canvas id="kf-video-canvas" width="384" height="216" title="点击原片可直接播放或暂停"></canvas>
+            <video id="kf-video-el" muted playsinline loop preload="auto" hidden title="点击原片可直接播放或暂停"></video>
             <div class="kf-video-status" id="kf-video-status" hidden>正在加载原片...</div>
           </div>
 
           <div class="kf-row">
-            <button type="button" class="kf-btn" id="kf-vid-prev" title="后退1帧 (-0.04s)">◀ -1帧</button>
-            <button type="button" class="kf-btn" id="kf-vid-play" style="flex:1;">▶ 播放原片</button>
-            <button type="button" class="kf-btn" id="kf-vid-next" title="前进1帧 (+0.04s)">+1帧 ▶</button>
-            <button type="button" class="kf-btn active" id="kf-vid-sync" title="开启后播放或拖动 3D 动作时原片自动同步对照">🔗 同步3D</button>
+            <button type="button" class="kf-btn" id="kf-vid-prev" style="padding:4px 6px;" title="后退1帧">◀-1f</button>
+            <button type="button" class="kf-btn" id="kf-vid-play" style="flex:1;padding:4px 6px;">▶ 播放</button>
+            <button type="button" class="kf-btn" id="kf-vid-next" style="padding:4px 6px;" title="前进1帧">+1f▶</button>
+            <button type="button" class="kf-btn active" id="kf-vid-sync" style="padding:4px 6px;" title="开启后播放或拖动 3D 动作时原片自动同步对照">🔗 同步3D</button>
           </div>
           <div class="kf-row">
             <input type="range" id="kf-vid-scrub" min="0" max="5" step="0.02" value="0" aria-label="原视频时间轴" style="flex:1;" />
@@ -393,6 +402,8 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
     dom.vidWide = q('#kf-vid-wide');
     dom.videoFileInput = q('#kf-video-file-input');
     dom.videoSelect = q('#kf-video-select');
+    dom.videoCanvas = q('#kf-video-canvas');
+    videoCanvasCtx = dom.videoCanvas ? dom.videoCanvas.getContext('2d') : null;
     dom.videoEl = q('#kf-video-el');
     dom.videoStatus = q('#kf-video-status');
     dom.vidPrev = q('#kf-vid-prev');
@@ -987,8 +998,8 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
       if (kf && mainChar) {
         applyPoseToRig(mainChar, kf.rootPos, kf.quats, 0);
       }
-      if (st.syncVideoWith3D && dom.videoEl && !dom.videoEl.paused) {
-        dom.videoEl.pause();
+      if (st.syncVideoWith3D) {
+        pauseOriginalMedia();
       }
     } else if (!st.playing && mode !== 'pose_edit') {
       // Auto-start playback when user clicks a preview/comparison mode tab!
@@ -1041,9 +1052,48 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
     trailMesh.geometry.setDrawRange(0, (trailHistory.length - 1) * 6);
   }
 
+  function drawSpriteAtTime(localSec, forceDraw = false) {
+    if (!activeSprite || !videoCanvasCtx || !dom.videoCanvas) return;
+    const dur = Math.max(0.1, activeSprite.meta.duration);
+    spriteTimeSec = THREE.MathUtils.clamp(Number(localSec) || 0, 0, dur);
+    const fc = activeSprite.meta.frameCount;
+    const idx = Math.min(fc - 1, Math.floor((spriteTimeSec / dur) * fc));
+    if (forceDraw || idx !== lastDrawnSpriteIdx) {
+      activeSprite.drawFrameIndex(videoCanvasCtx, idx, dom.videoCanvas.width, dom.videoCanvas.height);
+      lastDrawnSpriteIdx = idx;
+    }
+    const displayT = (activeSprite.meta.startSec || 0) + spriteTimeSec;
+    if (dom.vidScrub) dom.vidScrub.value = String(spriteTimeSec.toFixed(2));
+    if (dom.vidTime) dom.vidTime.textContent = `${displayT.toFixed(2)}s`;
+  }
+
+  function isOriginalMediaPaused() {
+    if (mediaMode === 'sprite') return !spritePlaying;
+    return Boolean(dom.videoEl?.paused ?? true);
+  }
+
+  function pauseOriginalMedia() {
+    if (mediaMode === 'sprite') {
+      spritePlaying = false;
+    } else if (dom.videoEl && !dom.videoEl.paused) {
+      dom.videoEl.pause();
+    }
+    syncVideoPlayButtonUI();
+  }
+
   function syncOriginalVideoTo3D(forceSeek = false) {
-    if (!st.syncVideoWith3D || st.isExtractingVideo || !dom.videoEl || !videoReady) return;
+    if (!st.syncVideoWith3D || st.isExtractingVideo || !videoReady) return;
     if (st.viewMode === 'pose_edit') return;
+
+    if (mediaMode === 'sprite' && activeSprite) {
+      const targetLocalSec = st.normalizedTime * activeSprite.meta.duration;
+      spritePlaying = Boolean(st.playing);
+      drawSpriteAtTime(targetLocalSec, forceSeek);
+      syncVideoPlayButtonUI();
+      return;
+    }
+
+    if (!dom.videoEl) return;
     const v = dom.videoEl;
     if (v.readyState < 2 || !Number.isFinite(v.duration) || v.duration <= 0.05) return;
 
@@ -1104,14 +1154,19 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
           st.normalizedTime = 1;
           st.playing = false;
           dom.btnPlayToggle.textContent = '▶ 播放验证';
-          if (st.syncVideoWith3D && dom.videoEl && !dom.videoEl.paused) {
-            dom.videoEl.pause();
+          if (st.syncVideoWith3D) {
+            pauseOriginalMedia();
           }
         }
       }
       dom.timelineScrub.value = String(Math.round(st.normalizedTime * maxIdx));
       updateFrameReadout();
       syncOriginalVideoTo3D(wrapped || st.normalizedTime < prevNorm);
+    } else if (mediaMode === 'sprite' && spritePlaying && activeSprite && !st.isExtractingVideo) {
+      // Independent sprite playback (e.g. while posing or when Sync-3D is off)
+      const speed = SPEEDS[st.speedIdx] || 1.0;
+      const nextSec = (spriteTimeSec + dt * speed) % Math.max(0.1, activeSprite.meta.duration);
+      drawSpriteAtTime(nextSec, false);
     }
 
     if (st.viewMode === 'pose_edit' && !st.playing) {
@@ -1178,24 +1233,73 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
   }
 
   function syncVideoPlayButtonUI() {
-    if (!dom.vidPlay || !dom.videoEl) return;
-    dom.vidPlay.textContent = dom.videoEl.paused ? '▶ 播放' : '⏸ 暂停';
+    if (!dom.vidPlay) return;
+    dom.vidPlay.textContent = isOriginalMediaPaused() ? '▶ 播放' : '⏸ 暂停';
   }
 
   async function loadVideoSource(url) {
-    if (!dom.videoEl || !url) return { ok: false };
+    if (!url) return { ok: false };
     const gen = ++videoLoadGen;
     videoCurrentRawUrl = url;
     videoReady = false;
     videoActiveResolvedUrl = '';
-    dom.videoEl.pause();
+    spritePlaying = false;
+    activeSprite = null;
+    lastDrawnSpriteIdx = -1;
+    dom.videoEl?.pause?.();
     syncVideoPlayButtonUI();
-    setVideoStatusOverlay('正在加载原片 (VP9 WebM / MP4)...', false);
+    setVideoStatusOverlay('正在加载原片画面...', false);
 
     if (fetchedVideoBlobUrl) {
       URL.revokeObjectURL(fetchedVideoBlobUrl);
       fetchedVideoBlobUrl = null;
     }
+
+    // Fast path for all built-in reference videos: standard JPEG Filmstrip Sprite Sheet on 2D Canvas
+    // (100% immune to <video> codec restrictions, Range/206 proxy bugs, and preview-pane CSP)
+    const spriteSpec = resolveSpritePreviewUrls(url);
+    if (spriteSpec && dom.videoCanvas && videoCanvasCtx) {
+      try {
+        const filmstrip = await loadSpriteFilmstrip(url);
+        if (gen !== videoLoadGen) return { ok: false, stale: true };
+        if (filmstrip) {
+          mediaMode = 'sprite';
+          activeSprite = filmstrip;
+          videoReady = true;
+          videoActiveResolvedUrl = filmstrip.activeUrl;
+          videoWindowStartSec = filmstrip.meta.startSec || 0;
+          videoWindowEndSec = videoWindowStartSec + filmstrip.meta.duration;
+          dom.videoCanvas.width = filmstrip.meta.tileW;
+          dom.videoCanvas.height = filmstrip.meta.tileH;
+          dom.videoCanvas.hidden = false;
+          if (dom.videoEl) dom.videoEl.hidden = true;
+          dom.vidScrub.max = filmstrip.meta.duration.toFixed(2);
+          drawSpriteAtTime(0, true);
+          setVideoStatusOverlay('');
+          syncVideoPlayButtonUI();
+          if (st.syncVideoWith3D && st.viewMode !== 'pose_edit' && st.playing) {
+            syncOriginalVideoTo3D(true);
+          }
+          return {
+            ok: true,
+            mode: 'sprite',
+            activeUrl: filmstrip.activeUrl,
+            duration: filmstrip.meta.duration,
+            videoWidth: filmstrip.meta.tileW,
+            videoHeight: filmstrip.meta.tileH,
+          };
+        }
+      } catch (spriteErr) {
+        if (gen !== videoLoadGen) return { ok: false, stale: true };
+        console.warn('[KeyframeStudio] Sprite filmstrip failed, falling back to <video>:', spriteErr);
+      }
+    }
+
+    // Fallback / Local uploaded video path: native <video> element
+    mediaMode = 'video';
+    if (dom.videoCanvas) dom.videoCanvas.hidden = true;
+    if (dom.videoEl) dom.videoEl.hidden = false;
+    if (!dom.videoEl) return { ok: false };
 
     const res = await bindVideoElementWithFallback(dom.videoEl, url, {
       isStale: () => gen !== videoLoadGen,
@@ -1208,7 +1312,7 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
     if (!res.ok) {
       videoReady = false;
       const errMsg = res.error?.message || '浏览器不支持该视频格式';
-      setVideoStatusOverlay(`原片加载失败：${errMsg}（可尝试切换视频或点击「+ 本地视频」）`, true);
+      setVideoStatusOverlay(`原片加载失败：${errMsg}（请尝试切换参考视频）`, true);
       syncVideoPlayButtonUI();
       return res;
     }
@@ -1237,19 +1341,25 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
   }
 
   async function toggleOriginalVideoPlay() {
-    if (!dom.videoEl) return;
-    if (!dom.videoEl.paused) {
-      dom.videoEl.pause();
-      syncVideoPlayButtonUI();
-      return;
-    }
-
-    if (!videoReady || dom.videoEl.readyState < 2) {
+    if (!videoReady) {
       const targetUrl = videoCurrentRawUrl || dom.videoSelect?.value;
       if (targetUrl) {
         const loaded = await loadVideoSource(targetUrl);
         if (!loaded.ok) return;
       }
+    }
+
+    if (mediaMode === 'sprite' && activeSprite) {
+      spritePlaying = !spritePlaying;
+      syncVideoPlayButtonUI();
+      return;
+    }
+
+    if (!dom.videoEl) return;
+    if (!dom.videoEl.paused) {
+      dom.videoEl.pause();
+      syncVideoPlayButtonUI();
+      return;
     }
 
     try {
@@ -1264,14 +1374,16 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
   }
 
   async function grabCurrentVideoFrameAsKeyframe(replaceCurrent = false) {
-    if (st.isExtractingVideo || !dom.videoEl) return null;
+    if (st.isExtractingVideo || !videoReady) return null;
+    const source = mediaMode === 'sprite' && activeSprite ? activeSprite : dom.videoEl;
+    if (!source) return null;
     st.isExtractingVideo = true;
-    dom.videoEl.pause();
-    syncVideoPlayButtonUI();
+    pauseOriginalMedia();
     setVideoStatusOverlay('正在用 MediaPipe 识别当前画面骨骼...', false);
 
     try {
-      const res = await extractPoseFromVideoElement(dom.videoEl, {
+      const res = await extractPoseFromVideoElement(source, {
+        timestampSec: mediaMode === 'sprite' ? spriteTimeSec : undefined,
         onStatus: (msg) => {
           setVideoStatusOverlay(msg, false);
         },
@@ -1321,18 +1433,24 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
   }
 
   async function runAutoVideoSalientKeyframes(targetCount = 5) {
-    if (st.isExtractingVideo || !dom.videoEl) return null;
+    if (st.isExtractingVideo || !videoReady) return null;
+    const source = mediaMode === 'sprite' && activeSprite ? activeSprite : dom.videoEl;
+    if (!source) return null;
     st.isExtractingVideo = true;
-    dom.videoEl.pause();
-    syncVideoPlayButtonUI();
+    pauseOriginalMedia();
     setVideoStatusOverlay('正在扫描视频动作极值帧...', false);
 
     try {
-      const dur = Number.isFinite(dom.videoEl.duration) && dom.videoEl.duration > 0 ? dom.videoEl.duration : 5.0;
-      const inSec = dur > 20 ? 26.72 : 0;
-      const outSec = dur > 20 ? Math.min(dur, 31.77) : Math.min(dur, 6.2);
+      const dur =
+        mediaMode === 'sprite' && activeSprite
+          ? activeSprite.meta.duration
+          : Number.isFinite(dom.videoEl?.duration) && dom.videoEl.duration > 0
+            ? dom.videoEl.duration
+            : 5.0;
+      const inSec = mediaMode === 'video' && dur > 20 ? 26.72 : 0;
+      const outSec = mediaMode === 'video' && dur > 20 ? Math.min(dur, 31.77) : Math.min(dur, 6.2);
 
-      const extractedList = await extractSalientKeyframesFromVideoElement(dom.videoEl, {
+      const extractedList = await extractSalientKeyframesFromVideoElement(source, {
         trimInSec: inSec,
         trimOutSec: outSec,
         targetCount,
@@ -1447,7 +1565,12 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
       loadVideoSource(ownedVideoBlobUrl);
     });
 
+    dom.videoCanvas?.addEventListener('click', () => {
+      toggleOriginalVideoPlay();
+    });
+
     dom.videoEl.addEventListener('loadedmetadata', () => {
+      if (mediaMode !== 'video') return;
       const d = Number.isFinite(dom.videoEl.duration) ? dom.videoEl.duration : 5;
       dom.vidScrub.max = d.toFixed(2);
       const t = dom.videoEl.currentTime || 0;
@@ -1456,6 +1579,7 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
     });
 
     dom.videoEl.addEventListener('timeupdate', () => {
+      if (mediaMode !== 'video') return;
       const t = dom.videoEl.currentTime || 0;
       dom.vidScrub.value = String(t);
       dom.vidTime.textContent = `${t.toFixed(2)}s`;
@@ -1469,22 +1593,34 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
     });
 
     dom.vidScrub.addEventListener('input', () => {
-      dom.videoEl.pause();
-      syncVideoPlayButtonUI();
-      dom.videoEl.currentTime = Number(dom.vidScrub.value) || 0;
+      pauseOriginalMedia();
+      const targetSec = Number(dom.vidScrub.value) || 0;
+      if (mediaMode === 'sprite' && activeSprite) {
+        drawSpriteAtTime(targetSec, true);
+      } else if (dom.videoEl) {
+        dom.videoEl.currentTime = targetSec;
+      }
     });
 
     dom.vidPrev.addEventListener('click', () => {
-      dom.videoEl.pause();
-      syncVideoPlayButtonUI();
-      dom.videoEl.currentTime = Math.max(0, (dom.videoEl.currentTime || 0) - 1 / 24);
+      pauseOriginalMedia();
+      if (mediaMode === 'sprite' && activeSprite) {
+        const step = 1 / Math.max(1, activeSprite.meta.fps || 12);
+        drawSpriteAtTime(Math.max(0, spriteTimeSec - step), true);
+      } else if (dom.videoEl) {
+        dom.videoEl.currentTime = Math.max(0, (dom.videoEl.currentTime || 0) - 1 / 24);
+      }
     });
 
     dom.vidNext.addEventListener('click', () => {
-      dom.videoEl.pause();
-      syncVideoPlayButtonUI();
-      const maxT = Number.isFinite(dom.videoEl.duration) ? dom.videoEl.duration - 0.01 : 10;
-      dom.videoEl.currentTime = Math.min(maxT, (dom.videoEl.currentTime || 0) + 1 / 24);
+      pauseOriginalMedia();
+      if (mediaMode === 'sprite' && activeSprite) {
+        const step = 1 / Math.max(1, activeSprite.meta.fps || 12);
+        drawSpriteAtTime(Math.min(activeSprite.meta.duration, spriteTimeSec + step), true);
+      } else if (dom.videoEl) {
+        const maxT = Number.isFinite(dom.videoEl.duration) ? dom.videoEl.duration - 0.01 : 10;
+        dom.videoEl.currentTime = Math.min(maxT, (dom.videoEl.currentTime || 0) + 1 / 24);
+      }
     });
 
     dom.vidPlay.addEventListener('click', () => {
@@ -1715,8 +1851,8 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
     if (st.syncVideoWith3D && st.viewMode !== 'pose_edit') {
       if (st.playing) {
         syncOriginalVideoTo3D(true);
-      } else if (dom.videoEl && !dom.videoEl.paused) {
-        dom.videoEl.pause();
+      } else {
+        pauseOriginalMedia();
       }
     }
     updateJointPinPositions();
@@ -1800,7 +1936,7 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
         cancelAnimationFrame(rafId);
         rafId = 0;
       }
-      dom.videoEl?.pause?.();
+      pauseOriginalMedia();
       syncGizmoAttachment();
       return;
     }
@@ -1831,6 +1967,7 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
   }
 
   function getState() {
+    const isSprite = mediaMode === 'sprite' && Boolean(activeSprite);
     return {
       active,
       mounted,
@@ -1839,13 +1976,18 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
       gizmoMode: st.gizmoMode,
       playing: st.playing,
       syncVideoWith3D: st.syncVideoWith3D,
+      videoMode: mediaMode,
       videoReady,
       videoActiveUrl: videoActiveResolvedUrl,
-      videoWidth: dom.videoEl?.videoWidth || 0,
-      videoHeight: dom.videoEl?.videoHeight || 0,
-      videoDuration: Number.isFinite(dom.videoEl?.duration) ? dom.videoEl.duration : 0,
-      videoPaused: Boolean(dom.videoEl?.paused ?? true),
-      videoCurrentTime: dom.videoEl?.currentTime || 0,
+      videoWidth: isSprite ? activeSprite.meta.tileW : dom.videoEl?.videoWidth || 0,
+      videoHeight: isSprite ? activeSprite.meta.tileH : dom.videoEl?.videoHeight || 0,
+      videoDuration: isSprite
+        ? activeSprite.meta.duration
+        : Number.isFinite(dom.videoEl?.duration)
+          ? dom.videoEl.duration
+          : 0,
+      videoPaused: isOriginalMediaPaused(),
+      videoCurrentTime: isSprite ? (activeSprite.meta.startSec || 0) + spriteTimeSec : dom.videoEl?.currentTime || 0,
       activeKfIdx: st.activeKfIdx,
       keyframeCount: st.keyframes.length,
       selectedBoneIdx: st.selectedBoneIdx,
@@ -1908,9 +2050,13 @@ export function createKeyframeStudio(hostEl, hooks = {}) {
       return getState();
     },
     grabVideoFrameAt: async (sec, replaceCurrent = false) => {
-      if (dom.videoEl && Number.isFinite(Number(sec))) {
-        dom.videoEl.currentTime = Number(sec);
-        await new Promise((r) => setTimeout(r, 150));
+      if (Number.isFinite(Number(sec))) {
+        if (mediaMode === 'sprite' && activeSprite) {
+          drawSpriteAtTime(Number(sec), true);
+        } else if (dom.videoEl) {
+          dom.videoEl.currentTime = Number(sec);
+          await new Promise((r) => setTimeout(r, 150));
+        }
       }
       await grabCurrentVideoFrameAsKeyframe(replaceCurrent);
       return getState();

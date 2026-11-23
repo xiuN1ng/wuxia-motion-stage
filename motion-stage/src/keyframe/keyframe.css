@@ -211,12 +211,18 @@ body.mode-keyframe [data-workbench-ui] {
   border: 1px solid var(--border-subtle);
 }
 
-.kf-video-box video {
+.kf-video-box video,
+.kf-video-box canvas {
   width: 100%;
   height: 100%;
   object-fit: contain;
   display: block;
   cursor: pointer;
+}
+
+.kf-video-box video[hidden],
+.kf-video-box canvas[hidden] {
+  display: none !important;
 }
 
 .kf-video-status {

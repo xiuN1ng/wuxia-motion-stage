@@ -1082,9 +1082,7 @@ export function resolveCompatVideoCandidates(rawUrlOrList, options = {}) {
     if (refMatch) {
       const key = refMatch[1];
       const encodedOrig = raw.includes('%') ? raw : encodeURI(raw);
-      const webmUrls = BUNDLED_WEBM_KEYS.has(key)
-        ? [`/demo/webm/${key}.webm`, `/video_compat/${key}.webm`]
-        : [`/video_compat/${key}.webm`];
+      const webmUrls = [`/video_compat/${key}.webm`];
       const mp4Urls = [`/video_compat/${key}.mp4`, encodedOrig];
 
       if (preferWebm) {
@@ -1147,6 +1145,136 @@ function waitVideoElementReady(video, timeoutMs = 6500) {
   });
 }
 
+const spriteFilmstripCache = new Map();
+
+/**
+ * Resolves a workspace `/reference_videos/<key>_*.mp4` URL to its pre-baked or
+ * on-demand 12fps JPEG Filmstrip Sprite Sheet + JSON manifest.
+ * Sprite sheets render via standard `image/jpeg` + 2D `<canvas>` so reference playback
+ * works with zero codec / `<video>` / Range-request / CSP issues in any preview pane.
+ */
+export function resolveSpritePreviewUrls(rawUrl) {
+  const raw = String(rawUrl || '').trim();
+  if (!raw || raw.startsWith('blob:') || raw.startsWith('data:')) return null;
+  const decoded = safeDecodeUri(raw);
+  const refMatch = /(?:^|\/)reference_videos\/([0-9a-zA-Z]+)_[^/]+\.mp4(?:[?#].*)?$/i.exec(decoded);
+  if (!refMatch) return null;
+  const key = refMatch[1];
+  if (BUNDLED_WEBM_KEYS.has(key)) {
+    return {
+      key,
+      metaUrl: `/demo/sprites/${key}.json`,
+      imgUrl: `/demo/sprites/${key}.jpg`,
+      fallbackMetaUrl: `/video_compat/${key}.json`,
+      fallbackImgUrl: `/video_compat/${key}.jpg`,
+    };
+  }
+  return {
+    key,
+    metaUrl: `/video_compat/${key}.json`,
+    imgUrl: `/video_compat/${key}.jpg`,
+    fallbackMetaUrl: null,
+    fallbackImgUrl: null,
+  };
+}
+
+async function fetchJsonWithTimeout(url, timeoutMs = 8000) {
+  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+  try {
+    const resp = await fetch(url, ctrl ? { signal: ctrl.signal } : undefined);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return await resp.json();
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function loadImageWithTimeout(url, timeoutMs = 12000) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.decoding = 'async';
+    let settled = false;
+    const done = (ok, err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      img.onload = null;
+      img.onerror = null;
+      if (ok) resolve(img);
+      else reject(err || new Error('图片解码失败'));
+    };
+    const timer = setTimeout(() => done(false, new Error('原片图集加载超时')), timeoutMs);
+    img.onload = () => done(true);
+    img.onerror = () => done(false, new Error('原片图集加载失败'));
+    img.src = url;
+  });
+}
+
+/**
+ * Loads (and caches) a 12fps JPEG Filmstrip Sprite Sheet for a built-in reference video.
+ */
+export async function loadSpriteFilmstrip(rawUrl) {
+  const spec = resolveSpritePreviewUrls(rawUrl);
+  if (!spec) return null;
+  if (spriteFilmstripCache.has(spec.key)) {
+    return spriteFilmstripCache.get(spec.key);
+  }
+
+  let meta = null;
+  let img = null;
+  let activeImgUrl = spec.imgUrl;
+  try {
+    [meta, img] = await Promise.all([
+      fetchJsonWithTimeout(resolveMediaUrl(spec.metaUrl), 8000),
+      loadImageWithTimeout(resolveMediaUrl(spec.imgUrl), 12000),
+    ]);
+  } catch (err) {
+    if (spec.fallbackMetaUrl && spec.fallbackImgUrl) {
+      activeImgUrl = spec.fallbackImgUrl;
+      [meta, img] = await Promise.all([
+        fetchJsonWithTimeout(resolveMediaUrl(spec.fallbackMetaUrl), 8000),
+        loadImageWithTimeout(resolveMediaUrl(spec.fallbackImgUrl), 12000),
+      ]);
+    } else {
+      throw err;
+    }
+  }
+
+  const frameCount = Math.max(1, Number(meta.frameCount) || 1);
+  const cols = Math.max(1, Number(meta.cols) || 8);
+  const tileW = Math.max(16, Number(meta.tileW) || 384);
+  const tileH = Math.max(16, Number(meta.tileH) || 216);
+  const fps = Math.max(1, Number(meta.fps) || 12);
+  const duration = Math.max(0.1, Number(meta.duration) || frameCount / fps);
+  const startSec = Number(meta.startSec) || 0;
+
+  const filmstrip = {
+    kind: 'sprite',
+    key: spec.key,
+    activeUrl: resolveMediaUrl(activeImgUrl),
+    meta: { ...meta, frameCount, cols, tileW, tileH, fps, duration, startSec },
+    img,
+    drawFrameIndex(ctx, frameIdx, dstW, dstH) {
+      const i = Math.max(0, Math.min(frameCount - 1, Math.round(frameIdx)));
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const w = dstW || ctx.canvas.width || tileW;
+      const h = dstH || ctx.canvas.height || tileH;
+      ctx.drawImage(img, col * tileW, row * tileH, tileW, tileH, 0, 0, w, h);
+      return i;
+    },
+    drawFrameAtSec(ctx, localSec, dstW, dstH) {
+      const clamped = Math.max(0, Math.min(duration, Number(localSec) || 0));
+      const idx = Math.min(frameCount - 1, Math.floor((clamped / Math.max(0.001, duration)) * frameCount));
+      return filmstrip.drawFrameIndex(ctx, idx, dstW, dstH);
+    },
+  };
+
+  spriteFilmstripCache.set(spec.key, filmstrip);
+  return filmstrip;
+}
+
 /**
  * Resiliently binds a video URL (or candidate list) to an existing `<video>` element.
  * Uses pure-ASCII VP9 WebM first and loads short clips into an in-memory `blob:` URL
@@ -1175,8 +1303,11 @@ export async function bindVideoElementWithFallback(videoEl, rawUrlOrList, option
     // Strategy 1: Fetch short clips into an in-memory Blob URL (immune to proxy Range/206 quirks)
     if (preferBlob && !isLocalBlob && !isLargeReel && typeof fetch === 'function') {
       let blobUrl = null;
+      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const fetchTimer = ctrl ? setTimeout(() => ctrl.abort(), 4500) : null;
       try {
-        const resp = await fetch(resolvedUrl);
+        const resp = await fetch(resolvedUrl, ctrl ? { signal: ctrl.signal } : undefined);
+        if (fetchTimer) clearTimeout(fetchTimer);
         if (isStale()) return { ok: false, stale: true };
         const ct = String(resp.headers?.get?.('content-type') || '');
         if (!resp.ok || /text\/html/i.test(ct)) {
@@ -1192,7 +1323,7 @@ export async function bindVideoElementWithFallback(videoEl, rawUrlOrList, option
         videoEl.pause();
         videoEl.src = blobUrl;
         videoEl.load();
-        await waitVideoElementReady(videoEl, 6500);
+        await waitVideoElementReady(videoEl, 4000);
         if (isStale()) {
           URL.revokeObjectURL(blobUrl);
           return { ok: false, stale: true };
@@ -1214,6 +1345,7 @@ export async function bindVideoElementWithFallback(videoEl, rawUrlOrList, option
           videoHeight: videoEl.videoHeight || 0,
         };
       } catch (err) {
+        if (fetchTimer) clearTimeout(fetchTimer);
         if (blobUrl) URL.revokeObjectURL(blobUrl);
         lastErr = err;
         // If fetch failed due to CORS/network, still try direct <video src> below for this candidate
@@ -1690,42 +1822,70 @@ export async function extractClipFromVideoUrl(urlOrList, arg1, arg2, arg3) {
   );
 }
 
-function captureVideoThumbnailDataUrl(videoEl, thumbW = 192) {
-  const vw = Math.max(1, videoEl.videoWidth || 640);
-  const vh = Math.max(1, videoEl.videoHeight || 360);
+function captureMediaThumbnailDataUrl(source, thumbW = 192, spriteSec = 0) {
+  const isSprite = source && source.kind === 'sprite' && typeof source.drawFrameAtSec === 'function';
+  const vw = Math.max(
+    1,
+    isSprite ? source.meta.tileW : source.videoWidth || source.width || 640
+  );
+  const vh = Math.max(
+    1,
+    isSprite ? source.meta.tileH : source.videoHeight || source.height || 360
+  );
   const thumbCanvas = document.createElement('canvas');
   thumbCanvas.width = thumbW;
   thumbCanvas.height = Math.max(90, Math.round((thumbW * vh) / vw));
   const ctx = thumbCanvas.getContext('2d');
-  ctx.drawImage(videoEl, 0, 0, thumbCanvas.width, thumbCanvas.height);
+  if (isSprite) {
+    source.drawFrameAtSec(ctx, spriteSec, thumbCanvas.width, thumbCanvas.height);
+  } else {
+    ctx.drawImage(source, 0, 0, thumbCanvas.width, thumbCanvas.height);
+  }
   return thumbCanvas.toDataURL('image/jpeg', 0.78);
 }
 
 /**
  * Extracts a single 3D 29-bone keyframe pose + JPEG thumbnail from the current frame
- * (or optional `targetTimeSec`) of a mounted HTMLVideoElement.
+ * (or optional `targetTimeSec`) of a mounted HTMLVideoElement, HTMLCanvasElement, or Sprite Filmstrip.
  */
-export async function extractPoseFromVideoElement(videoEl, options = {}) {
-  if (!videoEl) throw new Error('未找到视频画面元素');
-  if (
-    options.targetTimeSec !== undefined &&
-    options.targetTimeSec !== null &&
-    Number.isFinite(Number(options.targetTimeSec))
-  ) {
-    await seekVideoSafely(videoEl, Math.max(0, Number(options.targetTimeSec)));
+export async function extractPoseFromVideoElement(mediaSource, options = {}) {
+  if (!mediaSource) throw new Error('未找到视频画面元素');
+  const isSprite = mediaSource.kind === 'sprite' && typeof mediaSource.drawFrameAtSec === 'function';
+  const isVideoEl = !isSprite && typeof mediaSource.play === 'function';
+
+  let localTimeSec = Number(options.timestampSec ?? options.targetTimeSec ?? 0) || 0;
+  if (isVideoEl) {
+    if (
+      options.targetTimeSec !== undefined &&
+      options.targetTimeSec !== null &&
+      Number.isFinite(Number(options.targetTimeSec))
+    ) {
+      await seekVideoSafely(mediaSource, Math.max(0, Number(options.targetTimeSec)));
+    }
+    localTimeSec = Number(mediaSource.currentTime) || 0;
   }
 
-  const timestampSec = Number(videoEl.currentTime) || 0;
-  const thumbnailDataUrl = captureVideoThumbnailDataUrl(videoEl, 192);
+  const timestampSec = isSprite ? (mediaSource.meta.startSec || 0) + localTimeSec : localTimeSec;
+  const thumbnailDataUrl = captureMediaThumbnailDataUrl(mediaSource, 192, localTimeSec);
 
   const landmarker = await ensureLandmarker('IMAGE', options.onStatus, options.delegate || 'auto');
-  const vw = Math.max(1, videoEl.videoWidth || 640);
-  const vh = Math.max(1, videoEl.videoHeight || 360);
+  const vw = Math.max(
+    1,
+    isSprite ? mediaSource.meta.tileW : mediaSource.videoWidth || mediaSource.width || 640
+  );
+  const vh = Math.max(
+    1,
+    isSprite ? mediaSource.meta.tileH : mediaSource.videoHeight || mediaSource.height || 360
+  );
   const inferCanvas = document.createElement('canvas');
   inferCanvas.width = Math.min(640, Math.max(480, vw));
   inferCanvas.height = Math.max(240, Math.round((inferCanvas.width * vh) / vw));
   const inferCtx = inferCanvas.getContext('2d', { willReadFrequently: true });
-  inferCtx.drawImage(videoEl, 0, 0, inferCanvas.width, inferCanvas.height);
+  if (isSprite) {
+    mediaSource.drawFrameAtSec(inferCtx, localTimeSec, inferCanvas.width, inferCanvas.height);
+  } else {
+    inferCtx.drawImage(mediaSource, 0, 0, inferCanvas.width, inferCanvas.height);
+  }
 
   const res = landmarker.detect(inferCanvas);
   if (!res.worldLandmarks || res.worldLandmarks.length === 0) {
@@ -1771,28 +1931,41 @@ export async function extractPoseFromVideoElement(videoEl, options = {}) {
 }
 
 /**
- * Scans `[trimInSec, trimOutSec]` on a mounted HTMLVideoElement, solves the metric-calibrated
+ * Scans `[trimInSec, trimOutSec]` on a Sprite Filmstrip or HTMLVideoElement, solves the metric-calibrated
  * sequence, and returns `targetCount` salient keyframes with thumbnails and real segment durations.
  */
-export async function extractSalientKeyframesFromVideoElement(videoEl, options = {}) {
-  if (!videoEl) throw new Error('未找到视频画面元素');
-  const fullDur = Number.isFinite(videoEl.duration) && videoEl.duration > 0 ? videoEl.duration : 4.0;
-  const trimIn = THREE.MathUtils.clamp(Number(options.trimInSec) || 0, 0, Math.max(0, fullDur - 0.1));
-  const trimOut = THREE.MathUtils.clamp(
-    options.trimOutSec !== undefined && options.trimOutSec !== null
-      ? Number(options.trimOutSec)
-      : Math.min(fullDur, trimIn + 6.5),
-    Math.min(fullDur, trimIn + 0.2),
-    fullDur
-  );
+export async function extractSalientKeyframesFromVideoElement(mediaSource, options = {}) {
+  if (!mediaSource) throw new Error('未找到视频画面元素');
+  const isSprite = mediaSource.kind === 'sprite' && typeof mediaSource.drawFrameAtSec === 'function';
+  const fullDur = isSprite
+    ? Math.max(0.2, mediaSource.meta.duration)
+    : Number.isFinite(mediaSource.duration) && mediaSource.duration > 0
+      ? mediaSource.duration
+      : 4.0;
+  const trimIn = isSprite
+    ? 0
+    : THREE.MathUtils.clamp(Number(options.trimInSec) || 0, 0, Math.max(0, fullDur - 0.1));
+  const trimOut = isSprite
+    ? fullDur
+    : THREE.MathUtils.clamp(
+        options.trimOutSec !== undefined && options.trimOutSec !== null
+          ? Number(options.trimOutSec)
+          : Math.min(fullDur, trimIn + 6.5),
+        Math.min(fullDur, trimIn + 0.2),
+        fullDur
+      );
   const targetCount = THREE.MathUtils.clamp(Math.round(Number(options.targetCount) || 5), 3, 9);
-  const sampleFps = THREE.MathUtils.clamp(Math.round(Number(options.sampleFps) || 10), 6, 24);
+  const sampleFps = isSprite
+    ? Math.min(mediaSource.meta.fps || 12, THREE.MathUtils.clamp(Math.round(Number(options.sampleFps) || 10), 6, 12))
+    : THREE.MathUtils.clamp(Math.round(Number(options.sampleFps) || 10), 6, 24);
   const spanSec = Math.max(0.2, trimOut - trimIn);
-  const totalSamples = Math.max(targetCount, Math.round(spanSec * sampleFps));
+  const totalSamples = isSprite
+    ? Math.max(targetCount, Math.min(mediaSource.meta.frameCount, Math.round(spanSec * sampleFps)))
+    : Math.max(targetCount, Math.round(spanSec * sampleFps));
 
   const landmarker = await ensureLandmarker('VIDEO', options.onStatus, options.delegate || 'auto');
-  const vw = Math.max(1, videoEl.videoWidth || 640);
-  const vh = Math.max(1, videoEl.videoHeight || 360);
+  const vw = Math.max(1, isSprite ? mediaSource.meta.tileW : mediaSource.videoWidth || 640);
+  const vh = Math.max(1, isSprite ? mediaSource.meta.tileH : mediaSource.videoHeight || 360);
   const inferCanvas = document.createElement('canvas');
   inferCanvas.width = Math.min(640, Math.max(480, vw));
   inferCanvas.height = Math.max(240, Math.round((inferCanvas.width * vh) / vw));
@@ -1809,8 +1982,12 @@ export async function extractSalientKeyframesFromVideoElement(videoEl, options =
     const u = totalSamples > 1 ? i / (totalSamples - 1) : 0;
     const t = THREE.MathUtils.clamp(trimIn + u * safeSpan, 0, Math.max(0, fullDur - 0.008));
     sampleTimes.push(t);
-    await seekVideoSafely(videoEl, t);
-    inferCtx.drawImage(videoEl, 0, 0, inferCanvas.width, inferCanvas.height);
+    if (isSprite) {
+      mediaSource.drawFrameAtSec(inferCtx, t, inferCanvas.width, inferCanvas.height);
+    } else {
+      await seekVideoSafely(mediaSource, t);
+      inferCtx.drawImage(mediaSource, 0, 0, inferCanvas.width, inferCanvas.height);
+    }
 
     const tsMs = advanceMonotonicVideoTimestampMs(t - trimIn, clipBaseMs);
     const res = landmarker.detectForVideo(inferCanvas, tsMs);
@@ -1848,11 +2025,14 @@ export async function extractSalientKeyframesFromVideoElement(videoEl, options =
     const nextIdx = k < indices.length - 1 ? indices[k + 1] : idx;
     const tSec = sampleTimes[Math.min(sampleTimes.length - 1, idx)] ?? trimIn;
     const nextSec = sampleTimes[Math.min(sampleTimes.length - 1, nextIdx)] ?? tSec + 0.35;
-    await seekVideoSafely(videoEl, tSec);
-    const thumbnailDataUrl = captureVideoThumbnailDataUrl(videoEl, 192);
+    if (!isSprite) {
+      await seekVideoSafely(mediaSource, tSec);
+    }
+    const thumbnailDataUrl = captureMediaThumbnailDataUrl(mediaSource, 192, tSec);
     const srcFr = frames[idx];
+    const displayTime = isSprite ? (mediaSource.meta.startSec || 0) + tSec : tSec;
     outKeyframes.push({
-      sourceTimeSec: +tSec.toFixed(2),
+      sourceTimeSec: +displayTime.toFixed(2),
       durationToNext: THREE.MathUtils.clamp(+(nextSec - tSec).toFixed(2) || 0.38, 0.14, 1.8),
       thumbnailDataUrl,
       rootPos: srcFr.rootPos.clone(),
@@ -1862,4 +2042,5 @@ export async function extractSalientKeyframesFromVideoElement(videoEl, options =
 
   return outKeyframes;
 }
+
 

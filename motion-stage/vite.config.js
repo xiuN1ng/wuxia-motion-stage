@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 
@@ -11,6 +11,8 @@ const BVH_LIB_DIR = path.resolve(WORKSPACE_ROOT, 'bvh_library');
 const REF_VIDEOS_DIR = path.resolve(WORKSPACE_ROOT, 'reference_videos');
 const PUBLIC_WEBM_DIR = path.resolve(__dirname, 'public/demo/webm');
 const TMP_WEBM_CACHE_DIR = '/tmp/wuxia_video_webm_cache';
+const PUBLIC_SPRITES_DIR = path.resolve(__dirname, 'public/demo/sprites');
+const TMP_SPRITES_CACHE_DIR = '/tmp/wuxia_video_sprites_cache';
 
 const MIME_BY_EXT = {
   '.bvh': 'text/plain; charset=utf-8',
@@ -347,15 +349,127 @@ export function createCompatVideoMiddleware() {
     return job;
   }
 
+  const inFlightSprites = new Map();
+
+  function ensureSpriteSheet(key, srcMp4Path) {
+    const outJpg = path.join(TMP_SPRITES_CACHE_DIR, `${key}.jpg`);
+    const outJson = path.join(TMP_SPRITES_CACHE_DIR, `${key}.json`);
+    if (fs.existsSync(outJpg) && fs.existsSync(outJson) && fs.statSync(outJpg).size > 1024) {
+      return Promise.resolve({ jpgPath: outJpg, jsonPath: outJson });
+    }
+    if (inFlightSprites.has(key)) return inFlightSprites.get(key);
+
+    const job = new Promise((resolve, reject) => {
+      try {
+        fs.mkdirSync(TMP_SPRITES_CACHE_DIR, { recursive: true });
+        const durStr = execFileSync(
+          'ffprobe',
+          ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', srcMp4Path],
+          { encoding: 'utf8' }
+        ).trim();
+        const fullDur = Math.max(0.2, Number.parseFloat(durStr) || 3.0);
+        const startSec = key === '05' ? 26.72 : 0;
+        const clipDur = key === '05' ? Math.min(5.05, Math.max(1.0, fullDur - startSec)) : fullDur;
+        const fps = 12;
+        const cols = 8;
+        const tileW = 384;
+        const tileH = 216;
+        const frameCount = Math.max(1, Math.min(96, Math.round(clipDur * fps)));
+        const rows = Math.ceil(frameCount / cols);
+        const tmpJpg = `${outJpg}.part.${process.pid}.${Date.now()}.jpg`;
+        const vf = `fps=${fps},scale=${tileW}:${tileH}:force_original_aspect_ratio=decrease,pad=${tileW}:${tileH}:(ow-iw)/2:(oh-ih)/2:color=0x090b0f,tile=${cols}x${rows}`;
+        const args = ['-y', '-v', 'error'];
+        if (startSec > 0) args.push('-ss', startSec.toFixed(3), '-t', clipDur.toFixed(3));
+        args.push('-i', srcMp4Path, '-frames:v', '1', '-vf', vf, '-q:v', '5', tmpJpg);
+
+        const proc = spawn('ffmpeg', args, { stdio: 'ignore' });
+        proc.on('error', (err) => {
+          try {
+            fs.rmSync(tmpJpg, { force: true });
+          } catch {}
+          reject(err);
+        });
+        proc.on('close', (code) => {
+          if (code === 0 && fs.existsSync(tmpJpg) && fs.statSync(tmpJpg).size > 1024) {
+            fs.renameSync(tmpJpg, outJpg);
+            fs.writeFileSync(
+              outJson,
+              JSON.stringify({
+                key,
+                fps,
+                frameCount,
+                cols,
+                rows,
+                tileW,
+                tileH,
+                startSec: +startSec.toFixed(3),
+                duration: +clipDur.toFixed(3),
+                fullDuration: +fullDur.toFixed(3),
+              }),
+              'utf8'
+            );
+            resolve({ jpgPath: outJpg, jsonPath: outJson });
+          } else {
+            try {
+              fs.rmSync(tmpJpg, { force: true });
+            } catch {}
+            reject(new Error(`ffmpeg sprite exited with code ${code}`));
+          }
+        });
+      } catch (err) {
+        reject(err);
+      }
+    }).finally(() => {
+      inFlightSprites.delete(key);
+    });
+
+    inFlightSprites.set(key, job);
+    return job;
+  }
+
   return (req, res, next) => {
     if (!req.url || (req.method !== 'GET' && req.method !== 'HEAD')) return next();
     const rawPathname = req.url.split('?')[0].split('#')[0];
-    const m = /^\/video_compat\/([0-9a-zA-Z_-]+)\.(webm|mp4)$/.exec(rawPathname);
+    const m = /^\/video_compat\/([0-9a-zA-Z_-]+)\.(webm|mp4|jpg|json)$/.exec(rawPathname);
     if (!m) return next();
 
     const key = m[1];
     const ext = m[2];
     const srcMp4 = findReferenceVideoByKey(key);
+
+    if (ext === 'jpg' || ext === 'json') {
+      const mime = ext === 'jpg' ? 'image/jpeg' : 'application/json; charset=utf-8';
+      const bundled = path.join(PUBLIC_SPRITES_DIR, `${key}.${ext}`);
+      if (fs.existsSync(bundled) && fs.statSync(bundled).size > 32) {
+        serveBinaryFileWithRange(req, res, bundled, mime);
+        return;
+      }
+      const cached = path.join(TMP_SPRITES_CACHE_DIR, `${key}.${ext}`);
+      if (fs.existsSync(cached) && fs.statSync(cached).size > 32) {
+        serveBinaryFileWithRange(req, res, cached, mime);
+        return;
+      }
+      if (!srcMp4) {
+        res.statusCode = 404;
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.end('Not Found');
+        return;
+      }
+      ensureSpriteSheet(key, srcMp4)
+        .then(({ jpgPath, jsonPath }) => {
+          if (!res.writableEnded) {
+            serveBinaryFileWithRange(req, res, ext === 'jpg' ? jpgPath : jsonPath, mime);
+          }
+        })
+        .catch(() => {
+          if (!res.writableEnded) {
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+            res.end('Sprite generation failed');
+          }
+        });
+      return;
+    }
 
     if (ext === 'mp4') {
       if (!srcMp4) {
